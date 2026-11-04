@@ -7,8 +7,8 @@ import { applyBp, formatBp, formatCop, ratioToBp, roundUpToStep } from '@/domain
 import { cn } from '@/lib/utils'
 
 /**
- * Vista previa del sistema de diseño (Fase 0). Usa datos de ejemplo.
- * Se reemplaza por el router y el AppShell en la Fase 1.
+ * Inicio provisional: vista previa del sistema de diseño con datos de ejemplo.
+ * El dashboard real (con datos de Firestore) se construye en la Fase 6.
  */
 
 type TableState = 'disponible' | 'ocupada' | 'por_cobrar' | 'fuera_servicio'
@@ -45,7 +45,7 @@ const STOCK: { name: string; detail: string; stock: number; min: number; level: 
   { name: 'Ron Medellín 8 años 750 ml', detail: 'Rones', stock: 0, min: 3, level: 'agotado' },
 ]
 
-export default function App() {
+export function DashboardPreview() {
   const [now] = useState(() => new Date())
   const businessDate = businessDateOf(now)
   const dayLabel = formatBusinessDateLong(businessDate)
@@ -64,7 +64,7 @@ export default function App() {
           <p className="text-label text-muted-foreground first-letter:uppercase">
             Jornada del {dayLabel}
           </p>
-          <h1 className="mt-1 text-display font-semibold tracking-tight">Kmilo Bar</h1>
+          <h1 className="mt-1 text-display font-semibold tracking-tight">Inicio</h1>
         </div>
         <div className="flex items-center gap-3">
           <span className="inline-flex h-9 items-center gap-2 rounded-full bg-success/12 px-3.5 text-label font-medium text-success">

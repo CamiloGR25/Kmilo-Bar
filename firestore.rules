@@ -1,11 +1,34 @@
 rules_version = '2';
 
-// Fase 0: todo denegado. La Fase 1 (F1-05) añade isAdmin() con el UID autorizado.
-// Ver docs/DATA_MODEL.md §7.
+// Security Rules — docs/DATA_MODEL.md §7.
+// La seguridad real del sistema está aquí, no en la interfaz.
+// Cada colección se habilita en la fase que la construye, con su propia validación.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Único administrador autorizado (D-000). Debe coincidir con VITE_ADMIN_UID.
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.uid == 'JnLYZuNYe8Vjuvf8TEu7rmTP1nh2';
+    }
+
+    // Deniega todo por defecto.
     match /{document=**} {
       allow read, write: if false;
+    }
+
+    // Fase 1: configuración general (documento único). Se amplía en la Fase 2.
+    match /settings/{docId} {
+      allow read: if isAdmin() && docId == 'general';
+      allow create, update: if isAdmin() && docId == 'general' && validSettings(request.resource.data);
+      allow delete: if false;
+    }
+
+    function validSettings(data) {
+      return data.keys().hasOnly(['businessName', 'updatedAt'])
+        && (!('businessName' in data)
+          || (data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 80))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
   }
 }
