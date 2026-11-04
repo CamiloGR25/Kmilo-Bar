@@ -1,34 +1,54 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
-@import '@fontsource-variable/geist';
+@import '@fontsource-variable/ibm-plex-sans';
 
-/* Tema oscuro único en V1 (DESIGN_SYSTEM §1). La clase .dark se fija en <html>. */
+/*
+ * Tema "barra de noche" (docs/DESIGN_SYSTEM.md). Tema oscuro único en V1.
+ * Contrastes verificados sobre --navy (#101B30): texto 15,3:1 · texto-2 9,4:1 · texto-3 5,6:1.
+ */
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --font-sans: 'IBM Plex Sans Variable', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+
+  /* Escala tipográfica (base 16 px) */
+  --text-meta: 0.8125rem; /* 13 px: solo metadatos */
+  --text-meta--line-height: 1.125rem;
+  --text-label: 0.9375rem; /* 15 px: etiquetas de datos */
+  --text-label--line-height: 1.375rem;
+  --text-title: 1.25rem; /* 20 px: títulos de sección */
+  --text-title--line-height: 1.75rem;
+  --text-figure: 1.875rem; /* 30 px: cifras principales */
+  --text-figure--line-height: 2.25rem;
+  --text-display: 2.25rem; /* 36 px: encabezado de página */
+  --text-display--line-height: 2.5rem;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-raised: var(--raised);
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-text: var(--primary-text);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-solid: var(--destructive-solid);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
@@ -47,68 +67,75 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-xl: 1rem;
 }
 
-/* Paleta base del bar */
+/* Paleta base */
 :root,
 .dark {
-  --bg: #080c14; /* negro azulado */
-  --surface: #0b1220; /* azul oscuro */
-  --surface-2: #111d35; /* azul marino */
-  --line: #1e2a44;
-  --text: #f8fafc;
-  --text-muted: #94a3b8;
-  --blue: #3b82f6;
-  --blue-light: #60a5fa;
-  --blue-strong: #2563eb; /* fondo de botón: 5,2:1 con texto blanco */
-  --red-light: #f87171; /* texto destructivo: 6,8:1 sobre surface */
+  --ink: #0a1222; /* fondo: azul tinta */
+  --navy: #101b30; /* superficies */
+  --navy-raised: #17253f; /* elementos elevados, inputs */
+  --line: #24344f; /* bordes sutiles */
+  --line-strong: #34486a; /* bordes con intención */
+  --text: #eef2f8;
+  --text-2: #b4c0d4; /* etiquetas y texto secundario */
+  --text-3: #8494ae; /* solo metadatos */
+  --blue: #2563eb; /* fondo de acción (5,2:1 con blanco) */
+  --blue-hover: #3171f0;
+  --blue-text: #7aa7ff; /* enlaces y texto azul */
+  --blue-ring: #3b82f6;
   --green: #22c55e;
-  --red: #ef4444;
   --amber: #f59e0b;
+  --red: #ef4444;
+  --red-text: #f87171;
 
-  --background: var(--bg);
+  --background: var(--ink);
   --foreground: var(--text);
-  --card: var(--surface);
+  --card: var(--navy);
   --card-foreground: var(--text);
-  --popover: var(--surface);
+  --raised: var(--navy-raised);
+  --popover: var(--navy-raised);
   --popover-foreground: var(--text);
-  --primary: var(--blue-strong);
+  --primary: var(--blue);
+  --primary-hover: var(--blue-hover);
   --primary-foreground: #ffffff;
-  --primary-text: var(--blue-light);
-  --secondary: var(--surface-2);
+  --primary-text: var(--blue-text);
+  --secondary: var(--navy-raised);
   --secondary-foreground: var(--text);
-  --muted: var(--surface-2);
-  --muted-foreground: var(--text-muted);
-  --accent: var(--surface-2);
+  --muted: var(--navy-raised);
+  --muted-foreground: var(--text-2);
+  --subtle-foreground: var(--text-3);
+  --accent: var(--navy-raised);
   --accent-foreground: var(--text);
-  --destructive: var(--red-light);
+  --destructive: var(--red-text);
+  --destructive-solid: var(--red);
   --success: var(--green);
   --warning: var(--amber);
   --border: var(--line);
-  --input: var(--line);
-  --ring: var(--blue);
+  --border-strong: var(--line-strong);
+  --input: var(--line-strong);
+  --ring: var(--blue-ring);
 
-  --chart-1: var(--blue);
+  --chart-1: var(--blue-ring);
   --chart-2: var(--green);
   --chart-3: var(--amber);
   --chart-4: #a78bfa;
-  --chart-5: var(--text-muted);
+  --chart-5: var(--text-3);
 
   --radius: 0.75rem;
 
-  --sidebar: var(--surface);
+  --sidebar: var(--navy);
   --sidebar-foreground: var(--text);
-  --sidebar-primary: var(--blue-strong);
+  --sidebar-primary: var(--blue);
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: var(--surface-2);
+  --sidebar-accent: var(--navy-raised);
   --sidebar-accent-foreground: var(--text);
   --sidebar-border: var(--line);
-  --sidebar-ring: var(--blue);
+  --sidebar-ring: var(--blue-ring);
 
   color-scheme: dark;
 }
@@ -119,15 +146,21 @@
   }
   html {
     @apply font-sans antialiased;
+    text-rendering: optimizeLegibility;
   }
   body {
-    @apply min-h-dvh bg-background text-foreground;
+    @apply min-h-dvh bg-background text-base leading-relaxed text-foreground;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 }
 
-/* Números tabulares para montos y cantidades */
+/* Cifras tabulares: montos y cantidades alineados en columnas */
 @utility tabular {
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 @media (prefers-reduced-motion: reduce) {

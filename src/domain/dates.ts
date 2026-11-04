@@ -108,3 +108,9 @@ export function formatBusinessDate(date: BusinessDate): string {
   const parsed = parse(assertBusinessDate(date), 'yyyy-MM-dd', new Date())
   return format(parsed, 'EEE dd/MM', { locale: es }).replace('.', '')
 }
+
+/** Etiqueta larga de jornada: "2026-11-06" → "viernes 6 de noviembre". */
+export function formatBusinessDateLong(date: BusinessDate): string {
+  const parsed = parse(assertBusinessDate(date), 'yyyy-MM-dd', new Date())
+  return format(parsed, "EEEE d 'de' MMMM", { locale: es })
+}

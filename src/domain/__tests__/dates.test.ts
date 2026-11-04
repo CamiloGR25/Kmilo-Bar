@@ -5,6 +5,7 @@ import {
   businessDayRange,
   eachBusinessDate,
   formatBusinessDate,
+  formatBusinessDateLong,
   formatDate,
   formatTime,
   isBusinessDate,
@@ -74,6 +75,9 @@ describe('formatos', () => {
   })
   it('etiqueta corta de jornada', () => {
     expect(formatBusinessDate('2026-11-06')).toBe('vie 06/11')
+  })
+  it('etiqueta larga de jornada', () => {
+    expect(formatBusinessDateLong('2026-11-06')).toBe('viernes 6 de noviembre')
   })
 })
 
