@@ -18,9 +18,15 @@ import {
   type Transaction,
 } from 'firebase/firestore'
 import { businessDateOf } from '@/domain/dates'
+import {
+  inventoryMovementStats,
+  mergeDeltas,
+  type DailyStatsDelta,
+} from '@/domain/metrics/daily-stats'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
 import { addAudit } from '@/features/audit/services/audit'
+import { addDailyStats } from '@/features/reports/services/daily-stats'
 import {
   applyMovement,
   InventoryError,
@@ -134,6 +140,13 @@ export async function registerMovement(uid: string, req: MovementRequest): Promi
       type: 'ajuste',
       id: req.opId,
     })
+    // F-10 (D-221): las salidas sin venta y los sobrantes suman a las estadísticas del día.
+    addDailyStats(
+      db,
+      tx,
+      businessDateOf(new Date()),
+      inventoryMovementStats(req.type, result.qty, result.unitCost),
+    )
     if (LOSS_TYPES.includes(req.type) || req.type === 'ajuste_positivo') {
       addAudit(db, tx, uid, {
         action: req.type,
@@ -185,6 +198,7 @@ export async function applyCount(
         }),
       )
       let n = 0
+      const deltas: DailyStatsDelta[] = []
       for (const { line, movementId, movementSnap, productSnap } of snaps) {
         if (movementSnap.exists() || !productSnap.exists()) continue
         const p = productSnap.data()
@@ -198,8 +212,11 @@ export async function applyCount(
           type: 'conteo',
           id: countId,
         })
+        deltas.push(inventoryMovementStats('conteo', result.qty, result.unitCost))
         n++
       }
+      // Un solo documento de estadísticas por lote (D-221).
+      addDailyStats(db, tx, businessDateOf(new Date()), mergeDeltas(...deltas))
       return n
     })
   }

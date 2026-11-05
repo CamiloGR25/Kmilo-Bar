@@ -5,7 +5,17 @@
  * hasta las 05:59:59 del día siguiente, hora de Bogotá.
  */
 import { TZDate, tz } from '@date-fns/tz'
-import { addDays, endOfMonth, format, parse, startOfMonth, startOfWeek, subHours } from 'date-fns'
+import {
+  addDays,
+  addMonths,
+  differenceInCalendarDays,
+  endOfMonth,
+  format,
+  parse,
+  startOfMonth,
+  startOfWeek,
+  subHours,
+} from 'date-fns'
 import { es } from 'date-fns/locale'
 import { BUSINESS_DAY_CUTOFF_HOUR, TIME_ZONE } from '@/config/constants'
 
@@ -73,6 +83,24 @@ export function monthRangeOf(date: BusinessDate): BusinessDateRange {
   }
 }
 
+/** Suma (o resta) meses a una fecha de jornada (31 ene + 1 mes → 28/29 feb). */
+export function addBusinessMonths(date: BusinessDate, months: number): BusinessDate {
+  const parsed = parse(assertBusinessDate(date), 'yyyy-MM-dd', new Date())
+  return format(addMonths(parsed, months), 'yyyy-MM-dd')
+}
+
+/** Días de `from` a `to` (positivo si `to` es posterior). */
+export function daysBetween(from: BusinessDate, to: BusinessDate): number {
+  const a = parse(assertBusinessDate(from), 'yyyy-MM-dd', new Date())
+  const b = parse(assertBusinessDate(to), 'yyyy-MM-dd', new Date())
+  return differenceInCalendarDays(b, a)
+}
+
+/** Hora (0–23) de un instante en Bogotá. */
+export function hourOf(instant: Date): number {
+  return Number(format(instant, 'H', { in: inBogota }))
+}
+
 /** Lista de jornadas de un rango inclusivo (útil para gráficas por día). */
 export function eachBusinessDate({ from, to }: BusinessDateRange): BusinessDate[] {
   const result: BusinessDate[] = []
@@ -96,6 +124,18 @@ export function formatTime(instant: Date): string {
   const hour = Number(format(instant, 'H', { in: inBogota }))
   const suffix = hour < 12 ? 'a. m.' : 'p. m.'
   return `${format(instant, 'h:mm', { in: inBogota })} ${suffix}`
+}
+
+/** Etiqueta de una hora del día: 22 → "10 p. m.", 0 → "12 a. m.". */
+export function formatHour(hour: number): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${h12} ${hour < 12 ? 'a. m.' : 'p. m.'}`
+}
+
+/** Mes de una jornada: "2026-11-07" → "nov 2026". */
+export function formatMonth(date: BusinessDate): string {
+  const parsed = parse(assertBusinessDate(date), 'yyyy-MM-dd', new Date())
+  return format(parsed, 'MMM yyyy', { locale: es }).replace('.', '')
 }
 
 /** "07/11/2026 1:30 a. m." */

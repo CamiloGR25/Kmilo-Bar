@@ -203,12 +203,36 @@ service cloud.firestore {
         && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
               && request.resource.data.last == 0)
           || (id == 'cashSessions' && request.resource.data.keys().hasOnly(['last', 'openSessionId'])
-              && request.resource.data.last == 0 && request.resource.data.openSessionId == null));
+              && request.resource.data.last == 0 && request.resource.data.openSessionId == null)
+          || (id == 'inventoryReview' && validReview(request.resource.data)
+              && request.resource.data.inProgressId == null));
       allow update: if isAdmin()
         && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
               && request.resource.data.last == resource.data.last + 1)
-          || (id == 'cashSessions' && (cashOpening() || cashClosing())));
+          || (id == 'cashSessions' && (cashOpening() || cashClosing()))
+          || (id == 'inventoryReview' && validReview(request.resource.data)
+              && reviewTransition(resource.data, request.resource.data)));
       allow delete: if false;
+    }
+
+    // Fase 6 (R-INV-11, D-221): revisión de inventario cada N meses.
+    function validReview(d) {
+      return d.keys().hasOnly(['periodMonths', 'lastReviewDate', 'scheduledDate', 'inProgressId',
+          'startedAt', 'updatedAt'])
+        && isInt(d.periodMonths) && d.periodMonths >= 1 && d.periodMonths <= 12
+        && isDate(d.lastReviewDate)
+        && (d.scheduledDate == null || isDate(d.scheduledDate))
+        && (d.inProgressId == null || isText(d.inProgressId, 1, 60))
+        && (d.inProgressId == null ? d.startedAt == null : d.startedAt is timestamp)
+        && d.updatedAt == request.time;
+    }
+
+    // Empezar solo con la caja cerrada; una revisión en curso no se reemplaza por otra.
+    function reviewTransition(a, b) {
+      return (a.inProgressId == null && b.inProgressId != null)
+          ? (b.startedAt == request.time
+              && get(docPath('counters', 'cashSessions')).data.openSessionId == null)
+          : (a.inProgressId == null || b.inProgressId == null || b.inProgressId == a.inProgressId);
     }
 
     // Fase 5 (R-PAG-06): al cerrar, la caja abierta queda cerrada y el contador sin caja.
@@ -257,6 +281,12 @@ service cloud.firestore {
         && getAfter(c).data.openSessionId == null;
     }
 
+    // R-INV-11: no se abre caja mientras hay una revisión de inventario en curso.
+    function noReviewInProgress() {
+      let r = docPath('counters', 'inventoryReview');
+      return !exists(r) || get(r).data.inProgressId == null;
+    }
+
     function validCashOpen(id, d) {
       let c = docPath('counters', 'cashSessions');
       return d.keys().hasOnly(['number', 'businessDate', 'status', 'openingBalance', 'openedAt',
@@ -266,6 +296,7 @@ service cloud.firestore {
         && d.number == getAfter(c).data.last
         && getAfter(c).data.openSessionId == id
         && get(c).data.openSessionId == null
+        && noReviewInProgress()
         && isNonNegInt(d.openingBalance) && d.openingBalance <= 20000000
         && isDate(d.businessDate)
         && d.openedAt == request.time
@@ -575,13 +606,18 @@ service cloud.firestore {
 
     function validDailyStats(date, d) {
       return d.keys().hasOnly(['businessDate', 'salesGross', 'cogs', 'ordersCount', 'collected',
-          'orderLosses', 'byMethod', 'byChannel', 'byProduct', 'byCategory', 'updatedAt'])
+          'orderLosses', 'invLosses', 'invGains', 'byMethod', 'byChannel', 'byLossType', 'byHour',
+          'byProduct', 'byCategory', 'updatedAt'])
         && d.businessDate == date
         && isNonNegInt(d.get('salesGross', 0))
         && isNonNegInt(d.get('cogs', 0))
         && isNonNegInt(d.get('ordersCount', 0))
         && isNonNegInt(d.get('collected', 0))
         && isNonNegInt(d.get('orderLosses', 0))
+        && isNonNegInt(d.get('invLosses', 0))
+        && isNonNegInt(d.get('invGains', 0))
+        && d.get('byLossType', {}) is map
+        && d.get('byHour', {}) is map
         && d.get('byMethod', {}) is map
         && d.get('byChannel', {}) is map
         && d.get('byProduct', {}) is map

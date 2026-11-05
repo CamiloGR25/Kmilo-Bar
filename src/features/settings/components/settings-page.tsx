@@ -17,6 +17,8 @@ import {
   useProducts,
 } from '@/features/products/services/catalog-service'
 import { CategoriesSection } from '@/features/products/components/categories-section'
+import { ReviewSettingsSection } from '@/features/inventory/components/review-settings'
+import { StatsRebuildSection } from '@/features/reports/components/stats-rebuild-section'
 import {
   ROUNDING_STEPS,
   settingsFormSchema,
@@ -47,7 +49,7 @@ export function SettingsPage() {
     <Page>
       <PageHeader
         title="Configuración"
-        description="Datos del negocio, reglas de precio y categorías del catálogo."
+        description="Datos del negocio, reglas de precio, revisión de inventario, categorías y estadísticas."
       />
       {error && (
         <p role="alert" className="text-destructive">
@@ -64,7 +66,9 @@ export function SettingsPage() {
           <OutdatedPrices uid={user?.uid ?? ''} settings={settings} products={products.data} />
         </>
       )}
+      <ReviewSettingsSection />
       <CategoriesSection />
+      <StatsRebuildSection />
     </Page>
   )
 }

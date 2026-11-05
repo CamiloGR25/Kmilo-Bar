@@ -105,6 +105,17 @@ export function formatCop(amount: Cop): string {
   return copFormatter.format(assertCop(amount))
 }
 
+const compactFormatter = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 })
+
+/** Ejes de gráficas: 1250000 → "$ 1,3 M", 450000 → "$ 450 mil", 900 → "$ 900". */
+export function formatCopCompact(amount: Cop): string {
+  const abs = Math.abs(amount)
+  const sign = amount < 0 ? '−' : ''
+  if (abs >= 1_000_000) return `${sign}$ ${compactFormatter.format(abs / 1_000_000)} M`
+  if (abs >= 1_000) return `${sign}$ ${compactFormatter.format(abs / 1_000)} mil`
+  return `${sign}$ ${abs}`
+}
+
 /** 3333 bp → "33,3 %". */
 export function formatBp(bp: Bp): string {
   return `${percentFormatter.format(bpToPercent(bp))} %`

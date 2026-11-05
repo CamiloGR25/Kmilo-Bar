@@ -9,6 +9,7 @@ import { formatBusinessDateLong, formatTime } from '@/domain/dates'
 import { formatCop } from '@/domain/money'
 import { FormField } from '@/features/auth/components/form-field'
 import { useAuth } from '@/features/auth/use-auth'
+import { DaySummaryButton } from '@/features/reports/components/day-summary-button'
 import { cn } from '@/lib/utils'
 import { CashError, validateOpeningBalance, type CashSession } from '../domain/cash'
 import {
@@ -144,6 +145,7 @@ function ClosedSessionDetail({ session }: { session: CashSession }) {
       {c.differenceReason && (
         <p className="text-muted-foreground">Motivo de la diferencia: {c.differenceReason}</p>
       )}
+      <DaySummaryButton businessDate={session.businessDate} />
     </div>
   )
 }

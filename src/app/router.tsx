@@ -14,6 +14,7 @@ const BUILT = new Set([
   '/barra',
   '/cuentas',
   '/caja',
+  '/ventas',
   '/productos',
   '/inventario',
   '/configuracion',
@@ -47,8 +48,8 @@ export const routes: RouteObject[] = [
               {
                 index: true,
                 lazy: async () => ({
-                  Component: (await import('@/features/dashboard/components/dashboard-preview'))
-                    .DashboardPreview,
+                  Component: (await import('@/features/dashboard/components/dashboard-page'))
+                    .DashboardPage,
                 }),
               },
               { path: 'mas', element: <MorePage /> },
@@ -81,6 +82,12 @@ export const routes: RouteObject[] = [
                 path: 'caja',
                 lazy: async () => ({
                   Component: (await import('@/features/cash/components/cash-page')).CashPage,
+                }),
+              },
+              {
+                path: 'ventas',
+                lazy: async () => ({
+                  Component: (await import('@/features/reports/components/sales-page')).SalesPage,
                 }),
               },
               {

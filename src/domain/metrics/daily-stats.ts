@@ -6,10 +6,26 @@
  * Ventas (F-04) y costo de lo vendido (F-07) se suman cuando la cuenta queda **pagada**;
  * lo cobrado (F-06) se suma con cada pago, aunque sea parcial.
  */
+import { daysBetween, hourOf, type BusinessDate } from '@/domain/dates'
 import type { Cop } from '@/domain/money'
 
 export type StatsMethod = 'efectivo' | 'transferencia'
 export type StatsChannel = 'nequi' | 'daviplata' | 'banco' | 'breb_qr_llave' | 'otro'
+
+/**
+ * Salidas de inventario sin venta (F-10, D-221), valoradas al costo promedio del momento.
+ * `servido_no_cobrado` no es un movimiento: viene de las cuentas (D-217) y va en `orderLosses`.
+ */
+export const INVENTORY_LOSS_KEYS = [
+  'merma',
+  'danado',
+  'vencido',
+  'cortesia',
+  'consumo_propio',
+  'ajuste_negativo',
+  'conteo',
+] as const
+export type InventoryLossKey = (typeof INVENTORY_LOSS_KEYS)[number]
 
 export interface ProductStats {
   name: string
@@ -39,6 +55,13 @@ export interface DailyStatsDelta {
   byChannel?: Partial<Record<StatsChannel, Cop>>
   byProduct?: Record<string, ProductStats>
   byCategory?: Record<string, CategoryStats>
+  /** F-10 (D-221): salidas de inventario sin venta, a costo. */
+  invLosses?: Cop
+  /** Sobrantes: ajustes positivos y conteos con más unidades de las del sistema, a costo. */
+  invGains?: Cop
+  byLossType?: Partial<Record<InventoryLossKey, Cop>>
+  /** Ventas por hora de Bogotá ("0"…"23") según la hora en que se confirmó cada ronda (D-221). */
+  byHour?: Record<string, Cop>
 }
 
 interface StatsLine {
@@ -50,10 +73,16 @@ interface StatsLine {
   qty: number
   cancelledQty: number
   lostQty: number
+  /** Hora en que se confirmó la ronda (para `byHour`). */
+  addedAt?: Date | null
 }
 
-/** Delta de una cuenta que queda pagada (F-04, F-07), por producto y por categoría. */
-export function paidOrderStats(lines: readonly StatsLine[]): DailyStatsDelta {
+/**
+ * Delta de una cuenta que queda pagada (F-04, F-07), por producto, categoría y hora.
+ * `fallbackAt` se usa para las líneas sin hora de confirmación; sin él no se calcula `byHour`.
+ */
+export function paidOrderStats(lines: readonly StatsLine[], fallbackAt?: Date): DailyStatsDelta {
+  const byHour: Record<string, Cop> = {}
   const byProduct: Record<string, ProductStats> = {}
   const byCategory: Record<string, CategoryStats> = {}
   let salesGross = 0
@@ -79,8 +108,20 @@ export function paidOrderStats(lines: readonly StatsLine[]): DailyStatsDelta {
     c.qty += qty
     c.sales += sales
     c.cogs += cost
+    const at = l.addedAt ?? fallbackAt
+    if (at) {
+      const h = String(hourOf(at))
+      byHour[h] = (byHour[h] ?? 0) + sales
+    }
   }
-  return { salesGross, cogs, ordersCount: 1, byProduct, byCategory }
+  return {
+    salesGross,
+    cogs,
+    ordersCount: 1,
+    byProduct,
+    byCategory,
+    ...(Object.keys(byHour).length > 0 ? { byHour } : {}),
+  }
 }
 
 /** Delta de un pago (F-06): lo abonado, por medio y por canal. */
@@ -120,4 +161,112 @@ export function correctionStats(
 /** Delta de unidades servidas y no cobradas (parte de F-10). */
 export function lossStats(qty: number, unitCost: Cop): DailyStatsDelta {
   return { orderLosses: qty * unitCost }
+}
+
+/**
+ * Delta de un movimiento de inventario (F-10, D-221). `qty` lleva el signo del movimiento y
+ * `unitCost` es el costo con el que se valoró. Las salidas sin venta suman a `invLosses`; los
+ * sobrantes (ajuste positivo, conteo positivo) a `invGains`. Ventas, entradas y devoluciones
+ * no producen delta.
+ */
+export function inventoryMovementStats(type: string, qty: number, unitCost: Cop): DailyStatsDelta {
+  const value = Math.abs(qty) * unitCost
+  if (value === 0) return {}
+  if (type === 'ajuste_positivo' || (type === 'conteo' && qty > 0)) return { invGains: value }
+  if ((INVENTORY_LOSS_KEYS as readonly string[]).includes(type) && qty < 0) {
+    return { invLosses: value, byLossType: { [type as InventoryLossKey]: value } }
+  }
+  return {}
+}
+
+type NumMap = Partial<Record<string, number>>
+
+function addMaps(a: NumMap | undefined, b: NumMap | undefined): NumMap | undefined {
+  if (!a) return b && { ...b }
+  if (!b) return { ...a }
+  const out: NumMap = { ...a }
+  for (const [k, v] of Object.entries(b)) out[k] = (out[k] ?? 0) + (v ?? 0)
+  return out
+}
+
+/** Suma varios deltas (p. ej. los de un lote de conteo, que escriben un solo `dailyStats`). */
+export function mergeDeltas(...deltas: DailyStatsDelta[]): DailyStatsDelta {
+  const out: DailyStatsDelta = {}
+  const nums = [
+    'salesGross',
+    'cogs',
+    'ordersCount',
+    'collected',
+    'orderLosses',
+    'invLosses',
+    'invGains',
+  ] as const
+  for (const d of deltas) {
+    for (const k of nums) if (d[k] !== undefined) out[k] = (out[k] ?? 0) + d[k]!
+    out.byMethod = addMaps(out.byMethod, d.byMethod)
+    out.byChannel = addMaps(out.byChannel, d.byChannel)
+    out.byLossType = addMaps(out.byLossType, d.byLossType)
+    out.byHour = addMaps(out.byHour, d.byHour) as Record<string, Cop> | undefined
+    for (const [id, p] of Object.entries(d.byProduct ?? {})) {
+      out.byProduct ??= {}
+      const cur = out.byProduct[id]
+      out.byProduct[id] = cur
+        ? { ...cur, qty: cur.qty + p.qty, sales: cur.sales + p.sales, cogs: cur.cogs + p.cogs }
+        : { ...p }
+    }
+    for (const [id, c] of Object.entries(d.byCategory ?? {})) {
+      out.byCategory ??= {}
+      const cur = out.byCategory[id]
+      out.byCategory[id] = cur
+        ? { qty: cur.qty + c.qty, sales: cur.sales + c.sales, cogs: cur.cogs + c.cogs }
+        : { ...c }
+    }
+  }
+  for (const k of Object.keys(out) as (keyof DailyStatsDelta)[]) {
+    if (out[k] === undefined) delete out[k]
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Recálculo de un día completo (F6-04, D-221)
+// ---------------------------------------------------------------------------
+
+/** Máximo de días por recálculo (cuida las lecturas gratuitas). */
+export const MAX_REBUILD_DAYS = 31
+
+export interface RebuildInput {
+  orders: readonly { status: string; closedAt: Date | null; lines: readonly StatsLine[] }[]
+  payments: readonly { method: StatsMethod; channel: StatsChannel | null; amount: Cop }[]
+  movements: readonly { type: string; qty: number; unitCost: Cop }[]
+}
+
+/**
+ * Estadísticas completas de una jornada a partir de sus cuentas, pagos y movimientos.
+ * Debe dar lo mismo que la suma de los deltas que se escribieron en el momento.
+ */
+export function buildDayStats({ orders, payments, movements }: RebuildInput): DailyStatsDelta {
+  const deltas: DailyStatsDelta[] = []
+  for (const o of orders) {
+    if (o.status === 'pagada') deltas.push(paidOrderStats(o.lines, o.closedAt ?? undefined))
+    const lost = o.lines.reduce((sum, l) => sum + l.lostQty * l.unitCostSnap, 0)
+    if (lost > 0) deltas.push({ orderLosses: lost })
+  }
+  for (const p of payments) deltas.push(paymentStats(p))
+  for (const m of movements) deltas.push(inventoryMovementStats(m.type, m.qty, m.unitCost))
+  return mergeDeltas(...deltas)
+}
+
+/** Valida el rango del recálculo: fechas pasadas o de hoy, en orden y de máximo 31 días. */
+export function validateRebuildRange(
+  from: BusinessDate,
+  to: BusinessDate,
+  today: BusinessDate,
+): string | null {
+  if (!from || !to) return 'Escoge las dos fechas.'
+  if (to > today) return 'No se puede recalcular días futuros.'
+  const span = daysBetween(from, to)
+  if (span < 0) return 'La fecha inicial debe ser anterior a la final.'
+  if (span + 1 > MAX_REBUILD_DAYS) return `Máximo ${MAX_REBUILD_DAYS} días por vez.`
+  return null
 }

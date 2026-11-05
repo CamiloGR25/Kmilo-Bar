@@ -1,9 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { LogOut, Menu } from 'lucide-react'
+import { LogOut, Menu, WifiOff } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router'
 import { toast } from 'sonner'
 import { BrandLockup } from '@/components/shared/brand'
 import { useAuth } from '@/features/auth/use-auth'
+import { useOnline } from '@/lib/use-online'
 import { cn } from '@/lib/utils'
 import { NAV_ITEMS } from '../navigation'
 
@@ -32,9 +33,32 @@ export function AppShell() {
     <div className="min-h-dvh lg:grid lg:grid-cols-[16rem_1fr]">
       <Sidebar />
       <main className="min-w-0 pb-24 lg:pb-0">
+        <OfflineBanner />
         <Outlet />
       </main>
       <BottomNav />
+    </div>
+  )
+}
+
+/**
+ * Aviso sin conexión (F6-04). Las lecturas siguen desde la copia local, pero las operaciones que
+ * usan transacciones (cobrar, confirmar rondas, mover inventario) necesitan internet.
+ */
+function OfflineBanner() {
+  const online = useOnline()
+  if (online) return null
+  return (
+    <div
+      role="status"
+      className="sticky top-0 z-30 flex items-start gap-3 border-b border-warning/40 bg-[#2a2210] px-4 py-3 sm:px-8"
+    >
+      <WifiOff aria-hidden className="mt-0.5 size-5 shrink-0 text-warning" />
+      <p className="text-label">
+        <span className="font-semibold text-warning">Sin conexión.</span> Las cifras pueden no estar
+        al día y no se puede cobrar, confirmar rondas, abrir o cerrar caja ni mover inventario hasta
+        que vuelva el internet.
+      </p>
     </div>
   )
 }
@@ -55,6 +79,9 @@ function useInitialData() {
       .then(() => import('@/features/tables/services/tables-service'))
       .then(({ ensureSalesSetup }) => ensureSalesSetup(uid))
       .then((created) => created && toast.success('Mesas iniciales creadas'))
+      // Fase 6: revisión de inventario cada 4 meses (R-INV-11), contando desde hoy.
+      .then(() => import('@/features/inventory/services/review-service'))
+      .then(({ ensureInventoryReview }) => ensureInventoryReview(uid))
       .catch((e: Error) => toast.error(`No se pudieron preparar los datos: ${e.message}`))
   }, [uid])
 }

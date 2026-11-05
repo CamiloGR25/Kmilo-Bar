@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ArrowLeftRight, ClipboardCheck, ListTodo, Loader2, Search } from 'lucide-react'
+import { ArrowLeftRight, ListTodo, Loader2, Search } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { NativeSelect } from '@/components/shared/inputs'
 import { Page, PageHeader } from '@/components/shared/page-header'
@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { inventoryValue, type StockLevel } from '../domain/stock'
 import { useInventory } from '../hooks/use-inventory'
 import { MovementDialog } from './movement-dialog'
+import { ReviewButton, ReviewPanel } from './review-panel'
 
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -63,12 +64,7 @@ export function InventoryPage() {
         }
         actions={
           <>
-            <Button variant="outline" asChild>
-              <Link to="/inventario/conteo">
-                <ClipboardCheck aria-hidden />
-                Conteo físico
-              </Link>
-            </Button>
+            <ReviewButton />
             <Button asChild>
               <Link to="/inventario/recomendaciones">
                 <ListTodo aria-hidden />
@@ -78,6 +74,8 @@ export function InventoryPage() {
           </>
         }
       />
+
+      <ReviewPanel />
 
       {error && (
         <p role="alert" className="text-destructive">

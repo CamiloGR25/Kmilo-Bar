@@ -140,8 +140,15 @@ export async function openCashSession(
   const error = validateOpeningBalance(openingBalance)
   if (error) throw new CashError(error)
   return runTransaction(db, async (tx) => {
-    const counters = await tx.get(countersRef())
+    const [counters, review] = await Promise.all([
+      tx.get(countersRef()),
+      tx.get(doc(db, 'counters', 'inventoryReview')),
+    ])
     if (!counters.exists()) throw new CashError('Aún no se preparan los datos de ventas.')
+    // R-INV-11: mientras se cuenta el inventario no se vende.
+    if (review.data()?.inProgressId) {
+      throw new CashError('Hay una revisión de inventario en curso. Termínala o cancélala.')
+    }
     const openId = counters.data().openSessionId as string | null
     if (openId === sessionId) return false
     if (openId) throw new CashError('Ya hay una caja abierta.')

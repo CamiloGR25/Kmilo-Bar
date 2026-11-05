@@ -13,7 +13,12 @@ import {
   where,
 } from 'firebase/firestore'
 import { formatCop } from '@/domain/money'
-import { correctionStats, paidOrderStats, paymentStats } from '@/domain/metrics/daily-stats'
+import {
+  correctionStats,
+  mergeDeltas,
+  paidOrderStats,
+  paymentStats,
+} from '@/domain/metrics/daily-stats'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
 import { addAudit } from '@/features/audit/services/audit'
@@ -150,7 +155,7 @@ export async function registerPayment(
       db,
       tx,
       order.businessDate,
-      paid ? { ...stats, ...paidOrderStats(order.lines) } : stats,
+      paid ? mergeDeltas(stats, paidOrderStats(order.lines, new Date())) : stats,
     )
     if (paid) {
       addAudit(db, tx, uid, {

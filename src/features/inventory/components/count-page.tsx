@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, RotateCcw } from 'lucide-react'
+import { Loader2, RotateCcw, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
@@ -11,6 +11,7 @@ import { useAuth } from '@/features/auth/use-auth'
 import { cn } from '@/lib/utils'
 import { useInventory } from '../hooks/use-inventory'
 import { applyCount, newOpId } from '../services/inventory-service'
+import { cancelReview, finishReview, useInventoryReview } from '../services/review-service'
 
 const DRAFT_KEY = 'kmilo-bar:conteo-borrador'
 
@@ -31,8 +32,10 @@ function loadDraft(): Draft {
 }
 
 /**
- * Conteo físico (F3-08): escribe lo que hay en el estante; el sistema crea un movimiento
- * "conteo" por cada diferencia, valorado al costo promedio.
+ * Revisión de inventario (R-INV-11, D-222): se cuentan todos los productos con la caja cerrada;
+ * el sistema crea un movimiento "conteo" por cada diferencia, valorado al costo promedio, y al
+ * terminar empieza el siguiente periodo. Solo se usa con una revisión en curso: los productos
+ * sueltos se corrigen con su ajuste (⇆) en Inventario.
  */
 export function CountPage() {
   const navigate = useNavigate()
@@ -40,6 +43,9 @@ export function CountPage() {
   const { items, loading } = useInventory()
   const [draft, setDraft] = useState<Draft>(loadDraft)
   const [open, setOpen] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const review = useInventoryReview()
+  const reviewId = review.data?.inProgressId ?? null
 
   useEffect(() => {
     try {
@@ -82,6 +88,9 @@ export function CountPage() {
     return { countedN, diffs, value }
   }, [sorted, draft])
 
+  const missing = sorted.length - summary.countedN
+  const canFinish = reviewId !== null && !loading && missing === 0
+
   const setCounted = (productId: string, v: number | null) =>
     setDraft((d) => {
       const counted = { ...d.counted }
@@ -90,19 +99,40 @@ export function CountPage() {
       return { ...d, counted }
     })
 
+  if (!review.loading && !reviewId) {
+    return (
+      <Page>
+        <PageHeader
+          title="Revisión de inventario"
+          description="No hay una revisión en curso. Empiézala desde Inventario con la caja cerrada. Para corregir un producto suelto, usa su botón de ajuste."
+          back={{ to: '/inventario', label: 'Inventario' }}
+        />
+      </Page>
+    )
+  }
+
   return (
     <Page>
       <PageHeader
-        title="Conteo físico"
-        description="Cuenta lo que hay en el bar y escríbelo. Deja en blanco lo que no cuentes."
+        title="Revisión de inventario"
+        description={`Cuenta todos los productos, uno por uno. ${missing === 0 ? 'Ya están todos.' : `Faltan ${missing}.`} La caja no se puede abrir hasta terminar.`}
         back={{ to: '/inventario', label: 'Inventario' }}
         actions={
-          summary.countedN > 0 && (
-            <Button variant="outline" onClick={() => setDraft({ countId: newOpId(), counted: {} })}>
-              <RotateCcw aria-hidden />
-              Empezar de nuevo
+          <>
+            {summary.countedN > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => setDraft({ countId: newOpId(), counted: {} })}
+              >
+                <RotateCcw aria-hidden />
+                Empezar de nuevo
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setCancelling(true)}>
+              <X aria-hidden />
+              Cancelar revisión
             </Button>
-          )
+          </>
         }
       />
 
@@ -173,19 +203,36 @@ export function CountPage() {
             </>
           )}
         </p>
-        <Button disabled={summary.diffs === 0} onClick={() => setOpen(true)}>
-          Aplicar {summary.diffs} {summary.diffs === 1 ? 'ajuste' : 'ajustes'}
+        <Button disabled={!canFinish} onClick={() => setOpen(true)}>
+          Terminar revisión
         </Button>
       </section>
 
       <ConfirmDialog
+        open={cancelling}
+        onOpenChange={setCancelling}
+        title="Cancelar la revisión"
+        destructive
+        confirmLabel="Cancelar revisión"
+        description="No se aplica ningún ajuste y la fecha de la última revisión no cambia. Lo que llevas contado queda guardado en este navegador."
+        onConfirm={async () => {
+          try {
+            await cancelReview(user?.uid ?? '', reviewId ?? '')
+            toast.success('Revisión cancelada. Ya se puede abrir caja.')
+          } catch (e) {
+            toast.error(`No se pudo cancelar: ${(e as Error).message}`)
+          }
+        }}
+      />
+
+      <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
-        title="Aplicar conteo"
-        requireReason
-        confirmLabel="Aplicar"
-        description={`Se ajustará el stock de ${summary.diffs} productos al valor contado. Cada ajuste queda en el kardex del producto y no se puede deshacer (se corrige con otro movimiento).`}
-        onConfirm={async (reason) => {
+        title="Terminar la revisión"
+        confirmLabel="Terminar revisión"
+        description={`Se ajustará el stock de ${summary.diffs} productos al valor contado y la revisión quedará hecha hoy. Cada ajuste queda en el kardex y no se puede deshacer.`}
+        onConfirm={async () => {
+          if (!reviewId) return
           const lines = sorted
             .filter((i) => {
               const c = draft.counted[i.product.id]
@@ -193,13 +240,15 @@ export function CountPage() {
             })
             .map((i) => ({ productId: i.product.id, counted: draft.counted[i.product.id]! }))
           try {
-            const r = await applyCount(
-              user?.uid ?? '',
-              draft.countId,
-              lines,
-              reason ?? 'Conteo físico',
+            const uid = user?.uid ?? ''
+            // El ID del conteo es el de la revisión: si se reintenta, no se duplica.
+            const r = await applyCount(uid, reviewId, lines, 'Revisión de inventario periódica')
+            await finishReview(
+              uid,
+              reviewId,
+              `Revisión de inventario terminada: ${sorted.length} productos contados, ${r.adjusted} ajustados por ${formatCop(summary.value)}`,
             )
-            toast.success(`Conteo aplicado: ${r.adjusted} productos ajustados`)
+            toast.success(`Revisión terminada: ${r.adjusted} productos ajustados`)
             setDraft({ countId: newOpId(), counted: {} })
             navigate('/inventario')
           } catch (e) {

@@ -11,7 +11,7 @@ const ADMIN_UID = 'admin-uid'
 // Las pantallas se cargan de forma diferida; se precargan para que la primera prueba no
 // dependa del tiempo de transformación en frío del entorno de pruebas.
 beforeAll(async () => {
-  await import('@/features/dashboard/components/dashboard-preview')
+  await import('@/features/dashboard/components/dashboard-page')
 }, 30_000)
 
 /** Servicio de autenticación falso y controlable desde la prueba. */
