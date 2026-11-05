@@ -16,10 +16,12 @@ import {
   type Transaction,
 } from 'firebase/firestore'
 import { businessDateOf } from '@/domain/dates'
+import { lossStats } from '@/domain/metrics/daily-stats'
 import { formatCop } from '@/domain/money'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
 import { addAudit } from '@/features/audit/services/audit'
+import { addDailyStats } from '@/features/reports/services/daily-stats'
 import { applyMovement } from '@/features/inventory/domain/movements'
 import { writeMovement } from '@/features/inventory/services/inventory-service'
 import { productFromDoc } from '@/features/products/services/catalog-service'
@@ -280,7 +282,7 @@ export async function addLine(
       'total',
       subtotal,
       'balance',
-      subtotal,
+      subtotal - order.paidTotal,
       // R-VEN-02: agregar productos regresa la cuenta a "abierta".
       'status',
       'abierta',
@@ -337,6 +339,12 @@ export async function cancelLine(uid: string, req: CancelRequest): Promise<boole
       })
     }
     const subtotal = order.subtotal + plan.subtotalDelta
+    // D-219: sin reembolsos. Lo ya pagado no se puede cancelar.
+    if (subtotal < order.paidTotal) {
+      throw new OrderError(
+        `Ya se pagaron ${formatCop(order.paidTotal)} de esta cuenta y no hay reembolsos: solo se puede cancelar hasta ${formatCop(order.subtotal - order.paidTotal)}.`,
+      )
+    }
     const linePath = (field: string) => new FieldPath('items', req.lineId, field)
     tx.update(
       orderRef(req.orderId),
@@ -353,10 +361,13 @@ export async function cancelLine(uid: string, req: CancelRequest): Promise<boole
       'total',
       subtotal,
       'balance',
-      subtotal,
+      subtotal - order.paidTotal,
       'updatedAt',
       serverTimestamp(),
     )
+    if (req.mode === 'perdida') {
+      addDailyStats(db, tx, order.businessDate, lossStats(req.qty, line.unitCostSnap))
+    }
     addAudit(db, tx, uid, {
       action: req.mode === 'devolver' ? 'cancelar_item' : 'item_perdido',
       entity: 'order',

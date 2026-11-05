@@ -9,6 +9,7 @@ import {
   Plus,
   ReceiptText,
   RotateCcw,
+  Share2,
   Trash2,
   Undo2,
 } from 'lucide-react'
@@ -19,6 +20,9 @@ import { Page, PageHeader } from '@/components/shared/page-header'
 import { Button } from '@/components/ui/button'
 import { formatCop } from '@/domain/money'
 import { useAuth } from '@/features/auth/use-auth'
+import { PaymentDialog } from '@/features/cash/components/payment-dialog'
+import { methodLabel } from '@/features/cash/domain/payments'
+import { usePaymentsOfOrder } from '@/features/cash/services/payments-service'
 import { stockLevel } from '@/features/inventory/domain/stock'
 import { useInventory, type InventoryItem } from '@/features/inventory/hooks/use-inventory'
 import { useTables } from '@/features/tables/services/tables-service'
@@ -47,6 +51,7 @@ import {
 } from '../services/orders-service'
 import { CancelLineDialog, LabelDialog, MoveOrderDialog, Stepper } from './order-dialogs'
 import { ProductPicker } from './product-picker'
+import { ShareReceiptDialog } from './share-receipt-dialog'
 
 const errorText = (e: unknown) =>
   e instanceof OrderError ? e.message : `No se pudo guardar: ${(e as Error).message}`
@@ -94,6 +99,9 @@ function OrderView({ order }: { order: Order }) {
   const [naming, setNaming] = useState(false)
   const [closing, setClosing] = useState(false)
   const [statusPending, setStatusPending] = useState(false)
+  const [paying, setPaying] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const payments = usePaymentsOfOrder(order.id)
 
   const itemsById = useMemo(
     () => new Map((inventory.items ?? []).map((i) => [i.product.id, i])),
@@ -247,6 +255,25 @@ function OrderView({ order }: { order: Order }) {
               <span className="text-label text-muted-foreground">Total</span>
               <span className="tabular text-figure font-semibold">{formatCop(order.total)}</span>
             </div>
+            {(payments.data ?? []).length > 0 && (
+              <div className="flex flex-col gap-1.5 border-t px-4 py-3">
+                {(payments.data ?? []).map((p) => (
+                  <p key={p.id} className="flex justify-between gap-3 text-label">
+                    <span className="text-muted-foreground">
+                      Pagó con {methodLabel(p)}
+                      {p.change > 0 && `, cambio ${formatCop(p.change)}`}
+                    </span>
+                    <span className="tabular">{formatCop(p.amount)}</span>
+                  </p>
+                ))}
+                <p className="flex justify-between gap-3 pt-1 font-medium">
+                  <span>{order.balance > 0 ? 'Saldo por cobrar' : 'Pagada'}</span>
+                  <span className={cn('tabular', order.balance > 0 && 'text-warning')}>
+                    {formatCop(order.balance)}
+                  </span>
+                </p>
+              </div>
+            )}
           </section>
 
           {open && <div className="hidden lg:block">{roundPanel}</div>}
@@ -273,10 +300,26 @@ function OrderView({ order }: { order: Order }) {
                   {order.type === 'barra' ? 'Pasar a mesa' : 'Mover'}
                 </Button>
               </div>
-              <Button variant="secondary" disabled title="Los cobros llegan en la Fase 5">
+              <Button
+                size="lg"
+                onClick={() => {
+                  if (round.length > 0) {
+                    toast.warning('Confirma o vacía la ronda antes de cobrar.')
+                    return
+                  }
+                  setPaying(true)
+                }}
+                disabled={order.balance === 0 || confirming}
+              >
                 <ReceiptText aria-hidden />
-                Cobrar {formatCop(order.balance)} (Fase 5)
+                Cobrar {formatCop(order.balance)}
               </Button>
+              {order.lines.length > 0 && (
+                <Button variant="outline" onClick={() => setSharing(true)}>
+                  <Share2 aria-hidden />
+                  Resumen para el cliente
+                </Button>
+              )}
               {canCloseWithoutConsumption(order) && (
                 <Button variant="destructive" onClick={() => setClosing(true)}>
                   <Ban aria-hidden />
@@ -341,13 +384,36 @@ function OrderView({ order }: { order: Order }) {
       )}
 
       {!open && (
-        <p className="text-label text-muted-foreground">
-          Esta cuenta está cerrada y no se puede modificar.{' '}
-          <Link to="/cuentas" className="text-primary-text hover:underline">
-            Ver historial de cuentas
-          </Link>
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-label text-muted-foreground">
+            Esta cuenta está cerrada y no se puede modificar.{' '}
+            <Link to="/cuentas" className="text-primary-text hover:underline">
+              Ver historial de cuentas
+            </Link>
+          </p>
+          {order.lines.length > 0 && (
+            <Button variant="outline" onClick={() => setSharing(true)}>
+              <Share2 aria-hidden />
+              Resumen para el cliente
+            </Button>
+          )}
+        </div>
       )}
+
+      {open && (
+        <PaymentDialog
+          order={order}
+          open={paying}
+          onOpenChange={setPaying}
+          onPaid={() => navigate(back.to)}
+        />
+      )}
+      <ShareReceiptDialog
+        order={order}
+        payments={payments.data ?? []}
+        open={sharing}
+        onOpenChange={setSharing}
+      />
 
       <CancelLineDialog
         order={order}

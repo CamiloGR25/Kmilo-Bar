@@ -18,6 +18,7 @@ import { useAuth } from '@/features/auth/use-auth'
 import { isFree, type Table } from '@/features/tables/domain/tables'
 import { cn } from '@/lib/utils'
 import {
+  cancellableQty,
   OrderError,
   orderTitle,
   type CancelMode,
@@ -85,7 +86,8 @@ function CancelForm({
   const { user } = useAuth()
   const [opId] = useState(newId)
   const line = group // nombre y precio del renglón
-  const max = group.activeQty
+  // D-219: lo ya pagado no se cancela (sin reembolsos).
+  const max = cancellableQty(group, order)
   const [qty, setQty] = useState(1)
   const [mode, setMode] = useState<CancelMode>('devolver')
   const [reason, setReason] = useState('')
@@ -115,10 +117,18 @@ function CancelForm({
       <DialogHeader>
         <DialogTitle className="text-title">Cancelar {line.nameSnap}</DialogTitle>
         <DialogDescription className="text-label">
-          {orderTitle(order)}. Hay {max} {max === 1 ? 'activa' : 'activas'} en la cuenta, a{' '}
-          {formatCop(line.unitPrice)} cada una.
+          {orderTitle(order)}. Hay {group.activeQty} {group.activeQty === 1 ? 'activa' : 'activas'}{' '}
+          en la cuenta, a {formatCop(line.unitPrice)} cada una.
         </DialogDescription>
       </DialogHeader>
+
+      {order.paidTotal > 0 && (
+        <p className="rounded-lg bg-raised px-4 py-3 text-label text-muted-foreground">
+          {max === 0
+            ? `Ya se pagaron ${formatCop(order.paidTotal)} de esta cuenta y no hay reembolsos: no se puede cancelar más.`
+            : `Ya se pagaron ${formatCop(order.paidTotal)}. Sin reembolsos, solo se pueden cancelar ${max}.`}
+        </p>
+      )}
 
       {max > 1 && (
         <div className="flex flex-col gap-2">

@@ -4,6 +4,7 @@ import { nextTableNumber, newTable, validateTableName } from '@/features/tables/
 import {
   activeQty,
   buildLine,
+  cancellableQty,
   canCloseWithoutConsumption,
   changeRoundQty,
   formatElapsed,
@@ -19,6 +20,7 @@ import {
   type OrderLine,
   type SellableProduct,
 } from '../domain/orders'
+import { receiptText } from '../domain/receipt'
 
 const product: SellableProduct = {
   id: 'aguila',
@@ -206,5 +208,47 @@ describe('cuenta agrupada por producto (D-218)', () => {
       ['a', 1],
     ])
     expect(() => splitGroupCancellation(g!, 5)).toThrow('Solo hay 4')
+  })
+})
+
+describe('cancelación con pagos (D-219, sin reembolsos)', () => {
+  it('limita las unidades a lo que aún no se ha pagado', () => {
+    const g = { activeQty: 3, unitPrice: 4500 }
+    expect(cancellableQty(g, { balance: 13_500 })).toBe(3)
+    expect(cancellableQty(g, { balance: 4_500 })).toBe(1)
+    expect(cancellableQty(g, { balance: 4_000 })).toBe(0)
+  })
+})
+
+describe('resumen para el cliente (D-219)', () => {
+  const order = {
+    id: 'o1',
+    number: 7,
+    type: 'mesa' as const,
+    tableId: 'mesa-2',
+    tableName: 'Mesa 2',
+    label: null,
+    status: 'abierta' as const,
+    cashSessionId: 'cs1',
+    businessDate: '2026-11-05',
+    lines: [
+      line(),
+      line({ lineId: 'l2', qty: 1 }),
+      line({ lineId: 'l3', productId: 'x', nameSnap: 'Ron', qty: 1, cancelledQty: 1 }),
+    ],
+    subtotal: 18_000,
+    total: 18_000,
+    paidTotal: 10_000,
+    balance: 8_000,
+    openedAt: null,
+    closedAt: null,
+  }
+  it('agrupa, omite lo cancelado y muestra pagos y saldo', () => {
+    const text = receiptText('Kmilo Bar', order, [{ label: 'Nequi', amount: 10_000 }], '5 nov')
+    expect(text).toContain('Mesa 2, cuenta #7')
+    expect(text).toContain('4 × Águila 330 ml: $ 18.000')
+    expect(text).not.toContain('Ron')
+    expect(text).toContain('Pagado (Nequi): $ 10.000')
+    expect(text).toContain('Saldo pendiente: $ 8.000')
   })
 })

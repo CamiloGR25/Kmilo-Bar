@@ -6,7 +6,10 @@ import type { Cop } from '@/domain/money'
 
 export type OrderType = 'mesa' | 'barra'
 
-/** R-VEN-02 (+ `cerrada_sin_consumo`, D-217). `pagada` y `anulada` llegan en la Fase 5. */
+/**
+ * R-VEN-02 (+ `cerrada_sin_consumo`, D-217). `pagada` es definitiva: sin anulaciones ni
+ * reembolsos en V1 (D-219), así que `anulada` no se usa.
+ */
 export type OrderStatus = 'abierta' | 'por_cobrar' | 'cerrada_sin_consumo' | 'pagada' | 'anulada'
 
 export const OPEN_STATUSES: readonly OrderStatus[] = ['abierta', 'por_cobrar']
@@ -282,6 +285,18 @@ export function splitGroupCancellation(
     }
   }
   return parts
+}
+
+/**
+ * Unidades del renglón que aún se pueden cancelar (D-219): sin reembolsos, lo ya pagado no se
+ * devuelve, así que la cancelación no puede bajar el total por debajo de lo pagado.
+ */
+export function cancellableQty(
+  group: Pick<LineGroup, 'activeQty' | 'unitPrice'>,
+  order: Pick<Order, 'balance'>,
+): number {
+  if (group.unitPrice <= 0) return group.activeQty
+  return Math.min(group.activeQty, Math.floor(order.balance / group.unitPrice))
 }
 
 /** R-VEN-02 / D-217: solo se cierra sin consumo si no queda nada por cobrar. */

@@ -24,7 +24,7 @@ const STATUS_TONE: Partial<Record<OrderStatus, string>> = {
   anulada: 'text-destructive',
 }
 
-/** Historial de cuentas por jornada (F4-07). */
+/** Historial de cuentas por jornada (F4-07), con las pagadas de la Fase 5. */
 export function OrdersHistoryPage() {
   const [today] = useState(() => businessDateOf(new Date()))
   const [date, setDate] = useState(today)
@@ -70,7 +70,7 @@ export function OrdersHistoryPage() {
             onChange={(e) => setStatus(e.target.value as OrderStatus | '')}
           >
             <option value="">Todos</option>
-            {(['abierta', 'por_cobrar', 'cerrada_sin_consumo'] as const).map((s) => (
+            {(['abierta', 'por_cobrar', 'pagada', 'cerrada_sin_consumo'] as const).map((s) => (
               <option key={s} value={s}>
                 {ORDER_STATUS_LABELS[s]}
               </option>

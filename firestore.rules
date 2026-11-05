@@ -207,8 +207,18 @@ service cloud.firestore {
       allow update: if isAdmin()
         && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
               && request.resource.data.last == resource.data.last + 1)
-          || (id == 'cashSessions' && cashOpening()));
+          || (id == 'cashSessions' && (cashOpening() || cashClosing())));
       allow delete: if false;
+    }
+
+    // Fase 5 (R-PAG-06): al cerrar, la caja abierta queda cerrada y el contador sin caja.
+    function cashClosing() {
+      let b = request.resource.data;
+      return b.keys().hasOnly(['last', 'openSessionId'])
+        && b.last == resource.data.last
+        && resource.data.openSessionId != null
+        && b.openSessionId == null
+        && getAfter(docPath('cashSessions', resource.data.openSessionId)).data.status == 'cerrada';
     }
 
     function cashOpening() {
@@ -220,11 +230,31 @@ service cloud.firestore {
         && getAfter(docPath('cashSessions', b.openSessionId)).data.number == b.last;
     }
 
-    // ---------------------------------------------------------------- Caja (apertura)
+    // ---------------------------------------------------------------- Caja (apertura y cierre)
     match /cashSessions/{id} {
       allow read: if isAdmin();
       allow create: if isAdmin() && validCashOpen(id, request.resource.data);
-      allow update, delete: if false;
+      allow update: if isAdmin() && cashClose(id, resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    // R-PAG-06: conteo obligatorio; diferencia = contado − esperado, con motivo si no es 0.
+    // Definitivo: una caja cerrada no se vuelve a tocar.
+    function cashClose(id, a, b) {
+      let c = docPath('counters', 'cashSessions');
+      return a.status == 'abierta'
+        && b.diff(a).affectedKeys().hasOnly(['status', 'closedAt', 'closedBy', 'expectedCash',
+          'countedCash', 'difference', 'differenceReason', 'summary'])
+        && b.status == 'cerrada'
+        && b.closedAt == request.time
+        && b.closedBy == request.auth.uid
+        && isInt(b.expectedCash)
+        && isNonNegInt(b.countedCash)
+        && b.difference == b.countedCash - b.expectedCash
+        && (b.difference == 0 ? b.differenceReason == null : isText(b.differenceReason, 3, 300))
+        && b.summary is map
+        && get(c).data.openSessionId == id
+        && getAfter(c).data.openSessionId == null;
     }
 
     function validCashOpen(id, d) {
@@ -303,20 +333,23 @@ service cloud.firestore {
     function validOrder(d) {
       return d.keys().hasOnly(['number', 'type', 'tableId', 'tableName', 'label', 'status',
           'cashSessionId', 'businessDate', 'items', 'lastLineId', 'subtotal', 'total', 'paidTotal',
-          'tipTotal', 'balance', 'uid', 'openedAt', 'closedAt', 'updatedAt'])
+          'tipTotal', 'balance', 'lastPaymentId', 'uid', 'openedAt', 'closedAt', 'updatedAt'])
         && isInt(d.number) && d.number > 0
         && d.type in ['mesa', 'barra']
         && (d.type == 'mesa'
           ? (isText(d.tableId, 1, 60) && isText(d.tableName, 1, 40))
           : (d.tableId == null && d.tableName == null))
         && (d.label == null || isText(d.label, 1, 40))
-        && d.status in ['abierta', 'por_cobrar', 'cerrada_sin_consumo']
+        && d.status in ['abierta', 'por_cobrar', 'cerrada_sin_consumo', 'pagada']
         && isText(d.cashSessionId, 1, 60)
         && isDate(d.businessDate)
         && d.items is map
         && (d.lastLineId == null || isText(d.lastLineId, 1, 60))
         && isNonNegInt(d.subtotal) && d.total == d.subtotal
-        && d.paidTotal == 0 && d.tipTotal == 0 && d.balance == d.total
+        // Fase 5: saldo = total − pagado, nunca negativo (sin propinas ni reembolsos, D-219).
+        && isNonNegInt(d.paidTotal) && d.tipTotal == 0
+        && isNonNegInt(d.balance) && d.balance == d.total - d.paidTotal
+        && (d.get('lastPaymentId', null) == null || isText(d.lastPaymentId, 1, 60))
         && d.uid == request.auth.uid
         && d.openedAt is timestamp
         && (d.closedAt == null || d.closedAt is timestamp)
@@ -326,7 +359,7 @@ service cloud.firestore {
     function orderCreate(id, d) {
       let oc = docPath('counters', 'orders');
       return d.status == 'abierta' && d.items.size() == 0 && d.subtotal == 0
-        && d.lastLineId == null
+        && d.lastLineId == null && d.paidTotal == 0 && d.get('lastPaymentId', null) == null
         && d.openedAt == request.time && d.closedAt == null
         // D-110: la cuenta pertenece a la caja abierta.
         && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
@@ -344,18 +377,37 @@ service cloud.firestore {
 
     function orderUpdate(id, a, b) {
       let diff = b.items.diff(a.items);
+      let paying = b.get('lastPaymentId', null) != a.get('lastPaymentId', null);
       return a.status in ['abierta', 'por_cobrar']
         && b.number == a.number && b.cashSessionId == a.cashSessionId
         && b.businessDate == a.businessDate && b.openedAt == a.openedAt
-        && (diff.affectedKeys().size() == 0
-          ? (b.lastLineId == a.lastLineId && b.subtotal == a.subtotal && orderMeta(a, b))
-          : (diff.affectedKeys().hasOnly([b.lastLineId])
-            && b.type == a.type && b.tableId == a.tableId && b.label == a.label
-            && b.closedAt == null
-            && (diff.addedKeys().size() == 1
-              ? addLine(id, a, b, b.lastLineId)
-              : cancelLine(id, a, b, b.lastLineId))))
+        && (paying
+          ? (diff.affectedKeys().size() == 0 && payOrder(id, a, b))
+          : (b.paidTotal == a.paidTotal
+            && (diff.affectedKeys().size() == 0
+              ? (b.lastLineId == a.lastLineId && b.subtotal == a.subtotal && orderMeta(a, b))
+              : (diff.affectedKeys().hasOnly([b.lastLineId])
+                && b.type == a.type && b.tableId == a.tableId && b.label == a.label
+                && b.closedAt == null
+                && (diff.addedKeys().size() == 1
+                  ? addLine(id, a, b, b.lastLineId)
+                  : cancelLine(id, a, b, b.lastLineId))))))
         && tableFollows(id, a, b);
+    }
+
+    // R-PAG-02 / R-VEN-08: un pago nuevo en el mismo commit; con saldo 0 la cuenta queda pagada.
+    function payOrder(id, a, b) {
+      let payPath = docPath('payments', b.lastPaymentId);
+      let p = getAfter(payPath).data;
+      return isText(b.lastPaymentId, 1, 60)
+        && b.type == a.type && b.tableId == a.tableId && b.label == a.label
+        && b.lastLineId == a.lastLineId && b.subtotal == a.subtotal
+        && !exists(payPath)
+        && p.orderId == id
+        && p.amount == b.paidTotal - a.paidTotal
+        && (b.balance == 0
+          ? (b.status == 'pagada' && b.closedAt == request.time)
+          : (b.status == a.status && b.closedAt == null));
     }
 
     function validLine(l) {
@@ -434,6 +486,107 @@ service cloud.firestore {
 
     function tableReleased(id, tableId) {
       return getAfter(docPath('tables', tableId)).data.currentOrderId != id;
+    }
+
+    // ================================================================ Fase 5 (D-219)
+
+    // ---------------------------------------------------------------- Pagos
+    // Inmutables salvo la corrección del medio (D-219) mientras su caja siga abierta.
+    // Sin propinas. Efectivo: recibido >= abonado y cambio = la diferencia. Transferencia: canal.
+    match /payments/{pid} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validPayment(pid, request.resource.data);
+      allow update: if isAdmin() && paymentFix(resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    function paymentShape(d) {
+      return d.keys().hasOnly(['orderId', 'cashSessionId', 'businessDate', 'method', 'channel',
+          'amount', 'tendered', 'change', 'reference', 'kind', 'uid', 'createdAt', 'correctedAt',
+          'correctedFrom'])
+        && d.kind == 'pago'
+        && isInt(d.amount) && d.amount > 0
+        && (d.method == 'efectivo'
+          ? (d.channel == null && isInt(d.tendered) && d.tendered >= d.amount
+            && d.change == d.tendered - d.amount)
+          : (d.method == 'transferencia'
+            && d.channel in ['nequi', 'daviplata', 'banco', 'breb_qr_llave', 'otro']
+            && d.tendered == null && d.change == 0))
+        && (d.reference == null || isText(d.reference, 1, 60));
+    }
+
+    function validPayment(pid, d) {
+      let o = getAfter(docPath('orders', d.orderId)).data;
+      return pid.matches('^[A-Za-z0-9-]{1,40}$')
+        && paymentShape(d)
+        && isText(d.orderId, 1, 60)
+        // La cuenta es de la caja abierta y apunta a este pago (que cuadra con su pagado).
+        && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+        && o.cashSessionId == d.cashSessionId
+        && o.businessDate == d.businessDate
+        && o.lastPaymentId == pid
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time
+        && d.correctedAt == null && d.correctedFrom == null;
+    }
+
+    function paymentFix(a, b) {
+      return paymentShape(b)
+        && b.diff(a).affectedKeys().hasOnly(['method', 'channel', 'tendered', 'change',
+          'reference', 'correctedAt', 'correctedFrom'])
+        && (b.method != a.method || b.channel != a.channel)
+        && b.change == 0
+        && b.correctedAt == request.time
+        && b.correctedFrom == {'method': a.method, 'channel': a.channel}
+        && a.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId;
+    }
+
+    // ---------------------------------------------------------------- Movimientos de caja
+    // Inmutables, con motivo, solo en la caja abierta. Gastos y pagos a proveedores: Fases 7-8.
+    match /cashMovements/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validCashMovement(request.resource.data);
+      allow update, delete: if false;
+    }
+
+    function validCashMovement(d) {
+      return d.keys().hasOnly(['sessionId', 'businessDate', 'type', 'amount', 'reason', 'refType',
+          'refId', 'uid', 'createdAt'])
+        && d.sessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+        && d.businessDate == get(docPath('cashSessions', d.sessionId)).data.businessDate
+        && d.type in ['entrada_extra', 'retiro_dueno', 'correccion']
+        && isInt(d.amount) && d.amount != 0
+        && (d.type != 'entrada_extra' || d.amount > 0)
+        && (d.type != 'retiro_dueno' || d.amount < 0)
+        && isText(d.reason, 3, 200)
+        && d.refType == null && d.refId == null
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Agregados diarios
+    // D-204: se suman con increment() en las transacciones de cobro. Ventas y costo nunca negativos.
+    match /dailyStats/{date} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && isDate(date)
+        && validDailyStats(date, request.resource.data);
+      allow delete: if false;
+    }
+
+    function validDailyStats(date, d) {
+      return d.keys().hasOnly(['businessDate', 'salesGross', 'cogs', 'ordersCount', 'collected',
+          'orderLosses', 'byMethod', 'byChannel', 'byProduct', 'byCategory', 'updatedAt'])
+        && d.businessDate == date
+        && isNonNegInt(d.get('salesGross', 0))
+        && isNonNegInt(d.get('cogs', 0))
+        && isNonNegInt(d.get('ordersCount', 0))
+        && isNonNegInt(d.get('collected', 0))
+        && isNonNegInt(d.get('orderLosses', 0))
+        && d.get('byMethod', {}) is map
+        && d.get('byChannel', {}) is map
+        && d.get('byProduct', {}) is map
+        && d.get('byCategory', {}) is map
+        && d.updatedAt == request.time;
     }
 
     // ---------------------------------------------------------------- Historial de precios

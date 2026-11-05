@@ -34,6 +34,16 @@
       "collectionGroup": "orders",
       "fieldPath": "items",
       "indexes": []
+    },
+    {
+      "collectionGroup": "dailyStats",
+      "fieldPath": "byProduct",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "dailyStats",
+      "fieldPath": "byCategory",
+      "indexes": []
     }
   ]
 }
