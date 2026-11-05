@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { LogOut, Menu } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router'
 import { toast } from 'sonner'
@@ -6,6 +6,18 @@ import { BrandLockup } from '@/components/shared/brand'
 import { useAuth } from '@/features/auth/use-auth'
 import { cn } from '@/lib/utils'
 import { NAV_ITEMS } from '../navigation'
+
+/** Insignia de alertas de stock (se descarga aparte para no traer Firestore al iniciar). */
+const InventoryBadge = lazy(() => import('@/features/inventory/components/inventory-badge'))
+
+function NavBadge({ to, className }: { to: string; className?: string }) {
+  if (to !== '/inventario') return null
+  return (
+    <Suspense fallback={null}>
+      <InventoryBadge className={className} />
+    </Suspense>
+  )
+}
 
 /**
  * Estructura de la app autenticada (DESIGN_SYSTEM §6):
@@ -88,6 +100,7 @@ function Sidebar() {
                       className={cn('size-[1.125rem]', isActive && 'text-primary-text')}
                     />
                     {label}
+                    <NavBadge to={to} className="ml-auto" />
                   </>
                 )}
               </NavLink>
@@ -126,8 +139,9 @@ function BottomNav() {
       <ul className="grid h-16 grid-cols-5">
         {items.map(({ to, label, icon: Icon }) => (
           <li key={to}>
-            <NavLink to={to} className={({ isActive }) => linkClass(isActive)}>
+            <NavLink to={to} className={({ isActive }) => cn(linkClass(isActive), 'relative')}>
               <Icon aria-hidden className="size-[1.375rem]" />
+              <NavBadge to={to} className="absolute top-1.5 left-1/2 ml-2" />
               {label === 'Venta en barra' ? 'Barra' : label}
             </NavLink>
           </li>

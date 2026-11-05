@@ -55,8 +55,8 @@ describe('rutas protegidas', () => {
 
   it('con la sesión del administrador muestra la app', async () => {
     const { service } = createFakeAuth({ uid: ADMIN_UID, email: 'admin@bar.co' })
-    renderApp('/inventario', service)
-    expect(await screen.findByRole('heading', { name: 'Inventario' })).toBeInTheDocument()
+    renderApp('/caja', service)
+    expect(await screen.findByRole('heading', { name: 'Caja' })).toBeInTheDocument()
     expect(screen.getAllByText(/aún no está disponible/).length).toBeGreaterThan(0)
   })
 

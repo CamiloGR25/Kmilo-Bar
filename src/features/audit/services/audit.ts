@@ -5,11 +5,12 @@ import {
   doc,
   collection,
   serverTimestamp,
+  type Transaction,
   type WriteBatch,
   type Firestore,
 } from 'firebase/firestore'
 
-export type AuditEntity = 'settings' | 'category' | 'product' | 'catalog'
+export type AuditEntity = 'settings' | 'category' | 'product' | 'catalog' | 'inventory'
 
 export interface AuditEntryInput {
   action: string
@@ -21,9 +22,14 @@ export interface AuditEntryInput {
   reason?: string | null
 }
 
-/** Agrega un registro de auditoría al batch. Solo guarda los campos que cambiaron. */
-export function addAudit(db: Firestore, batch: WriteBatch, uid: string, input: AuditEntryInput) {
-  batch.set(doc(collection(db, 'auditLog')), {
+/** Agrega un registro de auditoría al batch o transacción. Solo guarda los campos que cambiaron. */
+export function addAudit(
+  db: Firestore,
+  writer: WriteBatch | Transaction,
+  uid: string,
+  input: AuditEntryInput,
+) {
+  ;(writer as WriteBatch).set(doc(collection(db, 'auditLog')), {
     action: input.action,
     entity: input.entity,
     entityId: input.entityId,

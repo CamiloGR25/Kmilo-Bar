@@ -8,7 +8,7 @@ import { AppShell, MorePage } from './layouts/app-shell'
 import { NAV_ITEMS } from './navigation'
 
 /** Rutas ya construidas: cada pantalla se descarga solo cuando se visita. */
-const BUILT = new Set(['/', '/productos', '/configuracion'])
+const BUILT = new Set(['/', '/productos', '/inventario', '/configuracion'])
 
 /** Módulos aún no construidos: muestran en qué fase llegan. */
 const pendingModules: RouteObject[] = NAV_ITEMS.filter((item) => !BUILT.has(item.to)).map(
@@ -69,6 +69,33 @@ export const routes: RouteObject[] = [
                 lazy: async () => ({
                   Component: (await import('@/features/products/components/product-form-page'))
                     .ProductFormPage,
+                }),
+              },
+              {
+                path: 'inventario',
+                lazy: async () => ({
+                  Component: (await import('@/features/inventory/components/inventory-page'))
+                    .InventoryPage,
+                }),
+              },
+              {
+                path: 'inventario/recomendaciones',
+                lazy: async () => ({
+                  Component: (await import('@/features/inventory/components/recommendations-page'))
+                    .RecommendationsPage,
+                }),
+              },
+              {
+                path: 'inventario/conteo',
+                lazy: async () => ({
+                  Component: (await import('@/features/inventory/components/count-page')).CountPage,
+                }),
+              },
+              {
+                path: 'inventario/:id',
+                lazy: async () => ({
+                  Component: (await import('@/features/inventory/components/kardex-page'))
+                    .KardexPage,
                 }),
               },
               {

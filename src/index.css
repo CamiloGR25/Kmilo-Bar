@@ -47,6 +47,8 @@
   --color-destructive-solid: var(--destructive-solid);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-stock-near: var(--stock-near);
+  --color-stock-low: var(--stock-low);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-input: var(--input);
@@ -115,6 +117,9 @@
   --destructive-solid: var(--red);
   --success: var(--green);
   --warning: var(--amber);
+  /* Semáforo de stock (R-INV-06): verde → amarillo → naranja → rojo */
+  --stock-near: #facc15; /* cerca del mínimo, 11,2:1 sobre --navy */
+  --stock-low: #f97316; /* en mínimo, 6,1:1 sobre --navy */
   --border: var(--line);
   --border-strong: var(--line-strong);
   --input: var(--line-strong);

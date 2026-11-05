@@ -5,8 +5,8 @@ export type StockLevel = 'ok' | 'cerca' | 'minimo' | 'agotado'
 
 const LEVELS: Record<StockLevel, { label: string; dot: string; text: string }> = {
   ok: { label: 'Stock OK', dot: 'bg-success', text: 'text-success' },
-  cerca: { label: 'Cerca del mínimo', dot: 'bg-warning', text: 'text-warning' },
-  minimo: { label: 'En mínimo', dot: 'bg-warning', text: 'text-warning' },
+  cerca: { label: 'Cerca del mínimo', dot: 'bg-stock-near', text: 'text-stock-near' },
+  minimo: { label: 'En mínimo', dot: 'bg-stock-low', text: 'text-stock-low' },
   agotado: { label: 'Agotado', dot: 'bg-destructive-solid', text: 'text-destructive' },
 }
 
@@ -23,7 +23,7 @@ export function StockIndicator({ level, className }: { level: StockLevel; classN
         className={cn(
           'size-2.5 shrink-0 rounded-full',
           dot,
-          level === 'minimo' && 'ring-2 ring-warning/40 ring-offset-2 ring-offset-card',
+          level === 'minimo' && 'ring-2 ring-stock-low/40 ring-offset-2 ring-offset-card',
         )}
       />
       {label}
