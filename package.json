@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emu": "vite --mode emulator",
     "dev:emulators": "firebase emulators:start --project demo-bar-kmilo",
+    "seed:emu": "node scripts/seed-emulator.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b && tsc -p tsconfig.rules.json",

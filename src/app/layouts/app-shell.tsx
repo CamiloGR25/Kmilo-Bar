@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LogOut, Menu } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router'
 import { toast } from 'sonner'
@@ -12,6 +12,7 @@ import { NAV_ITEMS } from '../navigation'
  * barra lateral en escritorio (≥ 1024 px) y barra inferior en el celular.
  */
 export function AppShell() {
+  useInitialData()
   return (
     <div className="min-h-dvh lg:grid lg:grid-cols-[16rem_1fr]">
       <Sidebar />
@@ -21,6 +22,22 @@ export function AppShell() {
       <BottomNav />
     </div>
   )
+}
+
+/**
+ * La primera vez que entra el administrador crea la configuración por defecto y las
+ * 12 categorías iniciales (idempotente). Firestore se carga aquí de forma diferida.
+ */
+function useInitialData() {
+  const { user } = useAuth()
+  const uid = user?.uid
+  useEffect(() => {
+    if (!uid) return
+    import('@/features/settings/services/settings-service')
+      .then(({ ensureInitialData }) => ensureInitialData(uid))
+      .then((created) => created && toast.success('Configuración inicial y categorías creadas'))
+      .catch((e: Error) => toast.error(`No se pudieron preparar los datos: ${e.message}`))
+  }, [uid])
 }
 
 function useSignOut() {

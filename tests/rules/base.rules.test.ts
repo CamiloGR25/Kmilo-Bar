@@ -2,28 +2,19 @@
  * Pruebas de Security Rules contra el emulador de Firestore.
  * Se ejecutan con: npm run test:rules  (requiere Java 21+).
  */
-import { readFileSync } from 'node:fs'
 import {
   assertFails,
   assertSucceeds,
-  initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing'
 import { deleteDoc, doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest'
-
-const rules = readFileSync('firestore.rules', 'utf8')
-/** El UID del administrador se toma de las propias reglas, para que no se desincronice. */
-const ADMIN_UID = /request\.auth\.uid == '([^']+)'/.exec(rules)?.[1] ?? ''
+import { ADMIN_UID, createEnv } from './helpers.ts'
 
 let env: RulesTestEnvironment
 
 beforeAll(async () => {
-  if (!ADMIN_UID) throw new Error('No se encontró el UID del administrador en firestore.rules')
-  env = await initializeTestEnvironment({
-    projectId: 'demo-bar-kmilo',
-    firestore: { rules, host: '127.0.0.1', port: 8080 },
-  })
+  env = await createEnv()
 })
 
 beforeEach(async () => {
@@ -50,8 +41,9 @@ describe('acceso por defecto', () => {
   })
 
   it('ni siquiera el administrador accede a colecciones aún no habilitadas', async () => {
-    await assertFails(getDoc(doc(admin(), 'products/p1')))
+    await assertFails(getDoc(doc(admin(), 'orders/o1')))
     await assertFails(setDoc(doc(admin(), 'orders/o1'), { total: 1000 }))
+    await assertFails(getDoc(doc(admin(), 'inventoryMovements/m1')))
   })
 })
 
@@ -60,6 +52,10 @@ describe('settings/general', () => {
     await assertSucceeds(
       setDoc(doc(admin(), 'settings/general'), {
         businessName: 'Kmilo Bar',
+        globalMarkupBp: 5000,
+        roundingStep: 100,
+        defaultMinStock: 6,
+        reportEmail: null,
         updatedAt: serverTimestamp(),
       }),
     )
@@ -70,6 +66,8 @@ describe('settings/general', () => {
     await assertFails(setDoc(doc(admin(), 'settings/general'), { businessName: 123 }))
     await assertFails(setDoc(doc(admin(), 'settings/general'), { businessName: '' }))
     await assertFails(setDoc(doc(admin(), 'settings/general'), { esAdmin: true }))
+    await assertFails(setDoc(doc(admin(), 'settings/general'), { roundingStep: 300 }))
+    await assertFails(setDoc(doc(admin(), 'settings/general'), { globalMarkupBp: -1 }))
   })
 
   it('solo existe el documento "general" y no se puede borrar', async () => {

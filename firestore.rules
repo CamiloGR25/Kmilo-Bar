@@ -12,23 +12,130 @@ service cloud.firestore {
         && request.auth.uid == 'JnLYZuNYe8Vjuvf8TEu7rmTP1nh2';
     }
 
+    function isInt(v) { return v is int; }
+    function isNonNegInt(v) { return v is int && v >= 0; }
+    function isText(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+    function optNonNegInt(v) { return v == null || isNonNegInt(v); }
+
     // Deniega todo por defecto.
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Fase 1: configuración general (documento único). Se amplía en la Fase 2.
+    // ---------------------------------------------------------------- Configuración
     match /settings/{docId} {
       allow read: if isAdmin() && docId == 'general';
       allow create, update: if isAdmin() && docId == 'general' && validSettings(request.resource.data);
       allow delete: if false;
     }
 
-    function validSettings(data) {
-      return data.keys().hasOnly(['businessName', 'updatedAt'])
-        && (!('businessName' in data)
-          || (data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 80))
-        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    function validSettings(d) {
+      return d.keys().hasOnly(['businessName', 'globalMarkupBp', 'roundingStep', 'defaultMinStock',
+          'nearMinFactorBp', 'targetStockFactorBp', 'supplierLeadDays', 'safetyDays',
+          'discountCapBp', 'reportEmail', 'updatedAt'])
+        && (!('businessName' in d) || isText(d.businessName, 1, 80))
+        && (!('globalMarkupBp' in d) || (isNonNegInt(d.globalMarkupBp) && d.globalMarkupBp <= 100000))
+        && (!('roundingStep' in d) || d.roundingStep in [50, 100, 500, 1000])
+        && (!('defaultMinStock' in d) || isNonNegInt(d.defaultMinStock))
+        && (!('nearMinFactorBp' in d) || (isInt(d.nearMinFactorBp) && d.nearMinFactorBp >= 10000))
+        && (!('targetStockFactorBp' in d) || (isInt(d.targetStockFactorBp) && d.targetStockFactorBp >= 10000))
+        && (!('supplierLeadDays' in d) || isNonNegInt(d.supplierLeadDays))
+        && (!('safetyDays' in d) || isNonNegInt(d.safetyDays))
+        && (!('discountCapBp' in d) || (isNonNegInt(d.discountCapBp) && d.discountCapBp <= 10000))
+        && (!('reportEmail' in d) || d.reportEmail == null || isText(d.reportEmail, 3, 120))
+        && (!('updatedAt' in d) || d.updatedAt is timestamp);
+    }
+
+    // ---------------------------------------------------------------- Categorías (Fase 2)
+    // No se borran: se desactivan.
+    match /categories/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && validCategory(request.resource.data);
+      allow delete: if false;
+    }
+
+    function validCategory(d) {
+      return d.keys().hasOnly(['name', 'icon', 'active', 'sortOrder'])
+        && isText(d.name, 1, 40)
+        && isText(d.icon, 1, 30)
+        && d.active is bool
+        && isInt(d.sortOrder);
+    }
+
+    // ---------------------------------------------------------------- Productos (Fase 2)
+    // Stock nunca negativo. En la Fase 2 el stock nace en 0 y no se edita desde el catálogo;
+    // el costo solo se edita a mano mientras no haya stock (D-105). No se borran (se desactivan).
+    match /products/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validProduct(request.resource.data)
+        && request.resource.data.stock == 0;
+      allow update: if isAdmin() && validProduct(request.resource.data)
+        && request.resource.data.stock == resource.data.stock
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (request.resource.data.avgCost == resource.data.avgCost || resource.data.stock == 0);
+      allow delete: if false;
+    }
+
+    function validProduct(d) {
+      return d.keys().hasOnly(['name', 'description', 'categoryId', 'unit', 'stock', 'minStock',
+          'avgCost', 'lastPurchaseCost', 'salePrice', 'pricingMode', 'markupBp', 'active',
+          'createdAt', 'updatedAt'])
+        && isText(d.name, 1, 80)
+        && d.description is string && d.description.size() <= 300
+        && isText(d.categoryId, 1, 60)
+        && d.unit in ['unidad', 'botella', 'media botella', 'lata', 'paquete', 'vaso', 'otro']
+        && isNonNegInt(d.stock)
+        && isNonNegInt(d.minStock)
+        && isNonNegInt(d.avgCost)
+        && isNonNegInt(d.lastPurchaseCost)
+        && isNonNegInt(d.salePrice)
+        && d.pricingMode in ['auto', 'manual']
+        && (d.markupBp == null || (isNonNegInt(d.markupBp) && d.markupBp <= 1000000))
+        && d.active is bool
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    // ---------------------------------------------------------------- Historial de precios
+    // Inmutable: solo se crea, y solo para productos que existen (o se crean en el mismo batch).
+    match /priceHistory/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validPriceHistory(request.resource.data)
+        && existsAfter(/databases/$(database)/documents/products/$(request.resource.data.productId));
+      allow update, delete: if false;
+    }
+
+    function validPriceHistory(d) {
+      return d.keys().hasOnly(['productId', 'field', 'oldValue', 'newValue', 'source', 'reason', 'at'])
+        && isText(d.productId, 1, 60)
+        && d.field in ['salePrice', 'avgCost', 'markupBp']
+        && optNonNegInt(d.oldValue)
+        && optNonNegInt(d.newValue)
+        && d.source in ['creacion', 'manual', 'recalculo', 'importacion', 'recepcion', 'ajuste']
+        && (d.reason == null || isText(d.reason, 1, 200))
+        && d.at == request.time;
+    }
+
+    // ---------------------------------------------------------------- Auditoría
+    // Inmutable. El UID debe ser el de quien escribe y la fecha la del servidor.
+    match /auditLog/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validAudit(request.resource.data);
+      allow update, delete: if false;
+    }
+
+    function validAudit(d) {
+      return d.keys().hasOnly(['action', 'entity', 'entityId', 'summary', 'before', 'after',
+          'reason', 'uid', 'at'])
+        && isText(d.action, 1, 40)
+        && isText(d.entity, 1, 40)
+        && isText(d.entityId, 1, 120)
+        && isText(d.summary, 1, 300)
+        && (d.before == null || d.before is map)
+        && (d.after == null || d.after is map)
+        && (d.reason == null || isText(d.reason, 1, 300))
+        && d.uid == request.auth.uid
+        && d.at == request.time;
     }
   }
 }

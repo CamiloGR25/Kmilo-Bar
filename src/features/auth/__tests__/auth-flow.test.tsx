@@ -1,12 +1,18 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { routes } from '@/app/router'
 import { AuthProvider } from '../auth-context'
 import type { AuthService, AuthUser } from '../services/auth-service'
 
 const ADMIN_UID = 'admin-uid'
+
+// Las pantallas se cargan de forma diferida; se precargan para que la primera prueba no
+// dependa del tiempo de transformación en frío del entorno de pruebas.
+beforeAll(async () => {
+  await import('@/features/dashboard/components/dashboard-preview')
+}, 30_000)
 
 /** Servicio de autenticación falso y controlable desde la prueba. */
 function createFakeAuth(initial: AuthUser | null = null) {
@@ -57,7 +63,9 @@ describe('rutas protegidas', () => {
   it('una cuenta que no es la del administrador se cierra y ve el aviso', async () => {
     const { service } = createFakeAuth({ uid: 'otro-uid', email: 'intruso@x.co' })
     renderApp('/', service)
-    expect(await screen.findByText(/no tiene acceso al sistema/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/no tiene acceso al sistema/, undefined, { timeout: 5000 }),
+    ).toBeInTheDocument()
     expect(service.signOut).toHaveBeenCalled()
   })
 })
