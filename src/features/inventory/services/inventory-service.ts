@@ -49,8 +49,11 @@ export interface InventoryMovement {
 /** Nuevo ID de operación (idempotencia). Se genera al abrir el formulario, no al enviar. */
 export const newOpId = () => crypto.randomUUID()
 
-/** Escribe producto + movimiento (+ historial de costo) dentro de una transacción. */
-function writeMovement(
+/**
+ * Escribe producto + movimiento (+ historial de costo) dentro de una transacción.
+ * Patrón obligatorio para todo cambio de stock (D-215); las ventas de la Fase 4 también lo usan.
+ */
+export function writeMovement(
   tx: Transaction,
   uid: string,
   movementId: string,
@@ -58,7 +61,7 @@ function writeMovement(
   type: MovementType,
   result: MovementResult,
   reason: string | null,
-  source: { type: 'ajuste' | 'conteo'; id: string },
+  source: { type: 'ajuste' | 'conteo' | 'venta'; id: string },
 ) {
   const product = productSnap.data()!
   const productRef = productSnap.ref

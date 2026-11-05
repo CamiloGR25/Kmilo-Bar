@@ -29,5 +29,11 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "orders",
+      "fieldPath": "items",
+      "indexes": []
+    }
+  ]
 }

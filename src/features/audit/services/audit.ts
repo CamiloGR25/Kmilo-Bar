@@ -10,7 +10,8 @@ import {
   type Firestore,
 } from 'firebase/firestore'
 
-export type AuditEntity = 'settings' | 'category' | 'product' | 'catalog' | 'inventory'
+export type AuditEntity =
+  'settings' | 'category' | 'product' | 'catalog' | 'inventory' | 'cash' | 'table' | 'order'
 
 export interface AuditEntryInput {
   action: string

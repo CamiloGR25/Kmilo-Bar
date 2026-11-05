@@ -55,8 +55,8 @@ describe('rutas protegidas', () => {
 
   it('con la sesión del administrador muestra la app', async () => {
     const { service } = createFakeAuth({ uid: ADMIN_UID, email: 'admin@bar.co' })
-    renderApp('/caja', service)
-    expect(await screen.findByRole('heading', { name: 'Caja' })).toBeInTheDocument()
+    renderApp('/compras', service)
+    expect(await screen.findByRole('heading', { name: 'Compras' })).toBeInTheDocument()
     expect(screen.getAllByText(/aún no está disponible/).length).toBeGreaterThan(0)
   })
 
@@ -92,13 +92,13 @@ describe('inicio de sesión', () => {
 
   it('al ingresar vuelve a la página que se pidió', async () => {
     const { service, emit } = createFakeAuth(null)
-    const router = renderApp('/caja', service)
+    const router = renderApp('/compras', service)
     await userEvent.type(await screen.findByLabelText('Correo'), 'admin@bar.co')
     await userEvent.type(screen.getByLabelText('Contraseña'), 'clave-correcta')
     await userEvent.click(screen.getByRole('button', { name: 'Ingresar' }))
     expect(service.signIn).toHaveBeenCalledWith('admin@bar.co', 'clave-correcta')
     emit({ uid: ADMIN_UID, email: 'admin@bar.co' })
-    await waitFor(() => expect(router.state.location.pathname).toBe('/caja'))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/compras'))
   })
 
   it('permite mostrar y ocultar la contraseña', async () => {

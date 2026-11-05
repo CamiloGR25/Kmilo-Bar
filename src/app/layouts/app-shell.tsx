@@ -10,6 +10,9 @@ import { NAV_ITEMS } from '../navigation'
 /** Insignia de alertas de stock (se descarga aparte para no traer Firestore al iniciar). */
 const InventoryBadge = lazy(() => import('@/features/inventory/components/inventory-badge'))
 
+/** Estado de la caja, siempre visible en el menú lateral (DESIGN_SYSTEM §6). */
+const CashStatus = lazy(() => import('@/features/cash/components/cash-status'))
+
 function NavBadge({ to, className }: { to: string; className?: string }) {
   if (to !== '/inventario') return null
   return (
@@ -48,6 +51,10 @@ function useInitialData() {
     import('@/features/settings/services/settings-service')
       .then(({ ensureInitialData }) => ensureInitialData(uid))
       .then((created) => created && toast.success('Configuración inicial y categorías creadas'))
+      // Fase 4: mesas iniciales y contadores de ventas (idempotente).
+      .then(() => import('@/features/tables/services/tables-service'))
+      .then(({ ensureSalesSetup }) => ensureSalesSetup(uid))
+      .then((created) => created && toast.success('Mesas iniciales creadas'))
       .catch((e: Error) => toast.error(`No se pudieron preparar los datos: ${e.message}`))
   }, [uid])
 }
@@ -74,8 +81,11 @@ function Sidebar() {
   const { signOut, pending } = useSignOut()
   return (
     <aside className="sticky top-0 hidden h-dvh flex-col border-r bg-card lg:flex">
-      <div className="px-5 pt-6 pb-5">
+      <div className="flex flex-col gap-4 px-5 pt-6 pb-5">
         <BrandLockup />
+        <Suspense fallback={<span className="h-9" />}>
+          <CashStatus className="w-fit" />
+        </Suspense>
       </div>
       <nav aria-label="Principal" className="flex-1 overflow-y-auto px-3">
         <ul className="flex flex-col gap-0.5">

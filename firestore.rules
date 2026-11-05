@@ -154,7 +154,26 @@ service cloud.firestore {
         && d.createdAt == request.time
         && before.stock == d.stockBefore
         && after.stock == d.stockAfter
-        && after.lastMovementId == movId;
+        && after.lastMovementId == movId
+        // Fase 4: ventas y cancelaciones solo desde una cuenta, con la línea que les corresponde.
+        && ((d.type in ['venta', 'cancelacion_item']) == (d.sourceType == 'venta'))
+        && (d.sourceType != 'venta' || saleMovementOk(movId, d));
+    }
+
+    // R-VEN-03 / R-VEN-05: `sale_{orderId}_{lineId}` y `cancel_{orderId}_{lineId}_{opId}`.
+    // Venta y cancelación no cambian el costo promedio.
+    function saleMovementOk(movId, d) {
+      let parts = movId.split('_');
+      let orderPath = /databases/$(database)/documents/orders/$(d.sourceId);
+      let line = getAfter(orderPath).data.items[parts[2]];
+      return parts.size() >= 3
+        && parts[1] == d.sourceId
+        && line.productId == d.productId
+        && d.avgCostAfter == d.avgCostBefore
+        && ((d.type == 'venta' && parts.size() == 3 && parts[0] == 'sale' && line.qty == -d.qty)
+          || (d.type == 'cancelacion_item' && parts.size() == 4 && parts[0] == 'cancel'
+            && line.lastCancelId == parts[3]
+            && line.cancelledQty - get(orderPath).data.items[parts[2]].cancelledQty == d.qty));
     }
 
     function signMatches(type, qty) {
@@ -168,6 +187,253 @@ service cloud.firestore {
     function reasonRequired(type) {
       return type in ['merma', 'danado', 'vencido', 'cortesia', 'consumo_propio',
         'ajuste_negativo', 'ajuste_positivo', 'conteo'];
+    }
+
+    // ================================================================ Fase 4 (D-217)
+
+    function isDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function docPath(col, id) { return /databases/$(database)/documents/$(col)/$(id); }
+
+    // ---------------------------------------------------------------- Contadores
+    // Nacen en 0. `orders` solo sube de a 1; `cashSessions` sube al abrir una caja y guarda
+    // cuál está abierta (R-PAG-07: una sola). El cierre llega en la Fase 5.
+    match /counters/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
+              && request.resource.data.last == 0)
+          || (id == 'cashSessions' && request.resource.data.keys().hasOnly(['last', 'openSessionId'])
+              && request.resource.data.last == 0 && request.resource.data.openSessionId == null));
+      allow update: if isAdmin()
+        && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
+              && request.resource.data.last == resource.data.last + 1)
+          || (id == 'cashSessions' && cashOpening()));
+      allow delete: if false;
+    }
+
+    function cashOpening() {
+      let b = request.resource.data;
+      return b.keys().hasOnly(['last', 'openSessionId'])
+        && resource.data.openSessionId == null
+        && b.last == resource.data.last + 1
+        && isText(b.openSessionId, 1, 60)
+        && getAfter(docPath('cashSessions', b.openSessionId)).data.number == b.last;
+    }
+
+    // ---------------------------------------------------------------- Caja (apertura)
+    match /cashSessions/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validCashOpen(id, request.resource.data);
+      allow update, delete: if false;
+    }
+
+    function validCashOpen(id, d) {
+      let c = docPath('counters', 'cashSessions');
+      return d.keys().hasOnly(['number', 'businessDate', 'status', 'openingBalance', 'openedAt',
+          'openedBy', 'closedAt'])
+        && d.status == 'abierta'
+        && isInt(d.number)
+        && d.number == getAfter(c).data.last
+        && getAfter(c).data.openSessionId == id
+        && get(c).data.openSessionId == null
+        && isNonNegInt(d.openingBalance) && d.openingBalance <= 20000000
+        && isDate(d.businessDate)
+        && d.openedAt == request.time
+        && d.openedBy == request.auth.uid
+        && d.closedAt == null;
+    }
+
+    // ---------------------------------------------------------------- Mesas
+    // ID `mesa-{número}`. No se borran. La mesa y su cuenta deben cuadrar (R-VEN-06).
+    match /tables/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validTable(request.resource.data)
+        && id == 'mesa-' + string(request.resource.data.number)
+        && request.resource.data.currentOrderId == null
+        && request.resource.data.status in ['disponible', 'fuera_servicio'];
+      allow update: if isAdmin() && validTable(request.resource.data)
+        && request.resource.data.number == resource.data.number
+        && tableStateOk(id, resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    function validTable(d) {
+      return d.keys().hasOnly(['name', 'number', 'status', 'currentOrderId', 'active', 'sortOrder'])
+        && isText(d.name, 1, 40)
+        && isInt(d.number) && d.number > 0 && d.number <= 999
+        && d.status in ['disponible', 'ocupada', 'por_cobrar', 'fuera_servicio']
+        && (d.currentOrderId == null || isText(d.currentOrderId, 1, 60))
+        && d.active is bool
+        && isInt(d.sortOrder);
+    }
+
+    function tableStatusOf(orderStatus) {
+      return orderStatus == 'abierta' ? 'ocupada'
+        : (orderStatus == 'por_cobrar' ? 'por_cobrar' : 'no_aplica');
+    }
+
+    function tableStateOk(id, a, b) {
+      return b.currentOrderId == null
+        ? (b.status in ['disponible', 'fuera_servicio']
+          && (a.currentOrderId == null || orderLeftTable(a.currentOrderId, id)))
+        : (b.active == true
+          && getAfter(docPath('orders', b.currentOrderId)).data.tableId == id
+          && b.status == tableStatusOf(getAfter(docPath('orders', b.currentOrderId)).data.status)
+          && (a.currentOrderId == b.currentOrderId
+            || (a.currentOrderId == null && a.status == 'disponible' && a.active == true)));
+    }
+
+    function orderLeftTable(orderId, tableId) {
+      let o = getAfter(docPath('orders', orderId)).data;
+      return o.tableId != tableId || !(o.status in ['abierta', 'por_cobrar']);
+    }
+
+    // ---------------------------------------------------------------- Cuentas
+    // Ítems en un mapa por lineId (D-217). Cada cambio toca a lo sumo una línea (`lastLineId`):
+    // agregarla (con su movimiento `venta`) o cancelar parte de ella. Sin descuentos en V1.
+    match /orders/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validOrder(request.resource.data)
+        && orderCreate(id, request.resource.data);
+      allow update: if isAdmin() && validOrder(request.resource.data)
+        && orderUpdate(id, resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    function validOrder(d) {
+      return d.keys().hasOnly(['number', 'type', 'tableId', 'tableName', 'label', 'status',
+          'cashSessionId', 'businessDate', 'items', 'lastLineId', 'subtotal', 'total', 'paidTotal',
+          'tipTotal', 'balance', 'uid', 'openedAt', 'closedAt', 'updatedAt'])
+        && isInt(d.number) && d.number > 0
+        && d.type in ['mesa', 'barra']
+        && (d.type == 'mesa'
+          ? (isText(d.tableId, 1, 60) && isText(d.tableName, 1, 40))
+          : (d.tableId == null && d.tableName == null))
+        && (d.label == null || isText(d.label, 1, 40))
+        && d.status in ['abierta', 'por_cobrar', 'cerrada_sin_consumo']
+        && isText(d.cashSessionId, 1, 60)
+        && isDate(d.businessDate)
+        && d.items is map
+        && (d.lastLineId == null || isText(d.lastLineId, 1, 60))
+        && isNonNegInt(d.subtotal) && d.total == d.subtotal
+        && d.paidTotal == 0 && d.tipTotal == 0 && d.balance == d.total
+        && d.uid == request.auth.uid
+        && d.openedAt is timestamp
+        && (d.closedAt == null || d.closedAt is timestamp)
+        && d.updatedAt == request.time;
+    }
+
+    function orderCreate(id, d) {
+      let oc = docPath('counters', 'orders');
+      return d.status == 'abierta' && d.items.size() == 0 && d.subtotal == 0
+        && d.lastLineId == null
+        && d.openedAt == request.time && d.closedAt == null
+        // D-110: la cuenta pertenece a la caja abierta.
+        && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+        && d.number == get(oc).data.last + 1
+        && getAfter(oc).data.last == d.number
+        && (d.type == 'barra' || tableTaken(id, d));
+    }
+
+    function tableTaken(id, d) {
+      let before = get(docPath('tables', d.tableId)).data;
+      return before.status == 'disponible' && before.active == true
+        && before.name == d.tableName
+        && getAfter(docPath('tables', d.tableId)).data.currentOrderId == id;
+    }
+
+    function orderUpdate(id, a, b) {
+      let diff = b.items.diff(a.items);
+      return a.status in ['abierta', 'por_cobrar']
+        && b.number == a.number && b.cashSessionId == a.cashSessionId
+        && b.businessDate == a.businessDate && b.openedAt == a.openedAt
+        && (diff.affectedKeys().size() == 0
+          ? (b.lastLineId == a.lastLineId && b.subtotal == a.subtotal && orderMeta(a, b))
+          : (diff.affectedKeys().hasOnly([b.lastLineId])
+            && b.type == a.type && b.tableId == a.tableId && b.label == a.label
+            && b.closedAt == null
+            && (diff.addedKeys().size() == 1
+              ? addLine(id, a, b, b.lastLineId)
+              : cancelLine(id, a, b, b.lastLineId))))
+        && tableFollows(id, a, b);
+    }
+
+    function validLine(l) {
+      return l.keys().hasOnly(['productId', 'nameSnap', 'categoryIdSnap', 'unitPrice',
+          'unitCostSnap', 'qty', 'cancelledQty', 'lostQty', 'lastCancelId', 'addedAt'])
+        && isText(l.productId, 1, 60)
+        && l.nameSnap is string && l.categoryIdSnap is string
+        && isNonNegInt(l.unitPrice) && isNonNegInt(l.unitCostSnap)
+        && isInt(l.qty) && l.qty > 0
+        && isNonNegInt(l.cancelledQty) && isNonNegInt(l.lostQty)
+        && l.cancelledQty + l.lostQty <= l.qty
+        && (l.lastCancelId == null || (l.lastCancelId is string
+          && l.lastCancelId.matches('^[A-Za-z0-9-]{1,40}$')))
+        && l.addedAt is timestamp;
+    }
+
+    // R-VEN-03: precio y costo congelados del producto, y su movimiento `venta` en el mismo commit.
+    function addLine(id, a, b, lid) {
+      let l = b.items[lid];
+      let p = get(docPath('products', l.productId)).data;
+      let movPath = docPath('inventoryMovements', 'sale_' + id + '_' + lid);
+      return lid.matches('^[A-Za-z0-9-]{1,40}$')
+        && validLine(l)
+        && l.cancelledQty == 0 && l.lostQty == 0 && l.lastCancelId == null
+        && l.addedAt == request.time
+        && p.active == true && p.salePrice > 0
+        && l.unitPrice == p.salePrice && l.unitCostSnap == p.avgCost
+        && l.nameSnap == p.name && l.categoryIdSnap == p.categoryId
+        && !exists(movPath)
+        && getAfter(movPath).data.qty == -l.qty
+        && b.subtotal == a.subtotal + l.unitPrice * l.qty
+        // R-VEN-02: agregar productos regresa la cuenta a "abierta".
+        && b.status == 'abierta';
+    }
+
+    // R-VEN-05 (D-217): devolver al stock (con movimiento) o pérdida (sin movimiento).
+    function cancelLine(id, a, b, lid) {
+      let o = a.items[lid];
+      let n = b.items[lid];
+      let dc = n.cancelledQty - o.cancelledQty;
+      let dl = n.lostQty - o.lostQty;
+      let movPath = docPath('inventoryMovements',
+        'cancel_' + id + '_' + lid + '_' + string(n.lastCancelId));
+      return validLine(n)
+        && n.productId == o.productId && n.nameSnap == o.nameSnap
+        && n.categoryIdSnap == o.categoryIdSnap
+        && n.unitPrice == o.unitPrice && n.unitCostSnap == o.unitCostSnap
+        && n.qty == o.qty && n.addedAt == o.addedAt
+        && dc >= 0 && dl >= 0 && dc + dl > 0 && (dc == 0 || dl == 0)
+        && n.lastCancelId is string && n.lastCancelId != o.lastCancelId
+        && b.subtotal == a.subtotal - o.unitPrice * (dc + dl)
+        && b.status == a.status
+        && (dc == 0 || (!exists(movPath) && getAfter(movPath).data.qty == dc));
+    }
+
+    // Sin tocar líneas: pedir cuenta / reabrir, cambiar nombre, mover de mesa o cerrar sin consumo.
+    function orderMeta(a, b) {
+      return (b.type == a.type || (a.type == 'barra' && b.type == 'mesa'))
+        && (b.status in ['abierta', 'por_cobrar']
+          ? b.closedAt == null
+          : (b.status == 'cerrada_sin_consumo' && a.subtotal == 0
+            && b.closedAt == request.time && b.tableId == a.tableId));
+    }
+
+    // R-VEN-06: la mesa nueva queda con la cuenta; la anterior se libera.
+    function tableFollows(id, a, b) {
+      let open = b.status in ['abierta', 'por_cobrar'];
+      return (b.type == 'barra' || !open || tableHolds(id, b))
+        && (a.type == 'barra' || (open && b.tableId == a.tableId) || tableReleased(id, a.tableId));
+    }
+
+    function tableHolds(id, b) {
+      let t = getAfter(docPath('tables', b.tableId)).data;
+      return t.currentOrderId == id && t.status == tableStatusOf(b.status);
+    }
+
+    function tableReleased(id, tableId) {
+      return getAfter(docPath('tables', tableId)).data.currentOrderId != id;
     }
 
     // ---------------------------------------------------------------- Historial de precios

@@ -8,7 +8,16 @@ import { AppShell, MorePage } from './layouts/app-shell'
 import { NAV_ITEMS } from './navigation'
 
 /** Rutas ya construidas: cada pantalla se descarga solo cuando se visita. */
-const BUILT = new Set(['/', '/productos', '/inventario', '/configuracion'])
+const BUILT = new Set([
+  '/',
+  '/mesas',
+  '/barra',
+  '/cuentas',
+  '/caja',
+  '/productos',
+  '/inventario',
+  '/configuracion',
+])
 
 /** Módulos aún no construidos: muestran en qué fase llegan. */
 const pendingModules: RouteObject[] = NAV_ITEMS.filter((item) => !BUILT.has(item.to)).map(
@@ -43,6 +52,37 @@ export const routes: RouteObject[] = [
                 }),
               },
               { path: 'mas', element: <MorePage /> },
+              {
+                path: 'mesas',
+                lazy: async () => ({
+                  Component: (await import('@/features/tables/components/tables-page')).TablesPage,
+                }),
+              },
+              {
+                path: 'barra',
+                lazy: async () => ({
+                  Component: (await import('@/features/orders/components/bar-page')).BarPage,
+                }),
+              },
+              {
+                path: 'cuentas',
+                lazy: async () => ({
+                  Component: (await import('@/features/orders/components/orders-history-page'))
+                    .OrdersHistoryPage,
+                }),
+              },
+              {
+                path: 'cuentas/:id',
+                lazy: async () => ({
+                  Component: (await import('@/features/orders/components/order-page')).OrderPage,
+                }),
+              },
+              {
+                path: 'caja',
+                lazy: async () => ({
+                  Component: (await import('@/features/cash/components/cash-page')).CashPage,
+                }),
+              },
               {
                 path: 'productos',
                 lazy: async () => ({
