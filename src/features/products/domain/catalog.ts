@@ -54,6 +54,11 @@ export interface Product {
   /** Recargo propio; null = usa el general. */
   markupBp: Bp | null
   active: boolean
+  /** Proveedor habitual (D-223 #5); null si no tiene. */
+  supplierId: string | null
+  /** Unidad de compra opcional (D-223 #2): "Canasta" de `unitsPerPurchase` unidades. */
+  purchaseUnit: string | null
+  unitsPerPurchase: number | null
   createdAt: Date | null
   updatedAt: Date | null
 }

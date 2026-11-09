@@ -161,12 +161,14 @@ export function planMethodCorrection(
 // Movimientos de caja (R-PAG-05)
 // ---------------------------------------------------------------------------
 
-export type CashMovementType = 'entrada_extra' | 'retiro_dueno' | 'correccion'
+/** `pago_proveedor` (Fase 7, D-223 #4) solo lo crea el pago a un proveedor "de la caja". */
+export type CashMovementType = 'entrada_extra' | 'retiro_dueno' | 'correccion' | 'pago_proveedor'
 
 export const CASH_MOVEMENT_LABELS: Record<CashMovementType, string> = {
   entrada_extra: 'Entrada extraordinaria',
   retiro_dueno: 'Retiro del dueño',
   correccion: 'Corrección',
+  pago_proveedor: 'Pago a proveedor',
 }
 
 export interface CashMovement {

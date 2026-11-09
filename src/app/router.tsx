@@ -15,6 +15,8 @@ const BUILT = new Set([
   '/cuentas',
   '/caja',
   '/ventas',
+  '/compras',
+  '/proveedores',
   '/productos',
   '/inventario',
   '/configuracion',
@@ -82,6 +84,48 @@ export const routes: RouteObject[] = [
                 path: 'caja',
                 lazy: async () => ({
                   Component: (await import('@/features/cash/components/cash-page')).CashPage,
+                }),
+              },
+              {
+                path: 'proveedores',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/suppliers-page'))
+                    .SuppliersPage,
+                }),
+              },
+              {
+                path: 'proveedores/:id',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/supplier-page'))
+                    .SupplierPage,
+                }),
+              },
+              {
+                path: 'compras',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/purchases-page'))
+                    .PurchasesPage,
+                }),
+              },
+              {
+                path: 'compras/nuevo',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/purchase-form-page'))
+                    .PurchaseFormPage,
+                }),
+              },
+              {
+                path: 'compras/:id',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/purchase-page'))
+                    .PurchasePage,
+                }),
+              },
+              {
+                path: 'compras/:id/editar',
+                lazy: async () => ({
+                  Component: (await import('@/features/purchases/components/purchase-form-page'))
+                    .PurchaseFormPage,
                 }),
               },
               {

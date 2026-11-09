@@ -27,19 +27,20 @@ import {
 import { newOpId, registerMovement } from '../services/inventory-service'
 
 const GROUPS: { label: string; types: ManualMovementType[] }[] = [
-  { label: 'Entradas', types: ['entrada_manual', 'entrada_inicial'] },
+  // D-223 #7: la mercancía nueva entra por Compras; aquí solo queda el inventario inicial.
+  { label: 'Entradas', types: ['entrada_inicial'] },
   { label: 'Salidas', types: ['merma', 'danado', 'vencido', 'cortesia', 'consumo_propio'] },
   { label: 'Correcciones', types: ['ajuste_positivo', 'ajuste_negativo'] },
 ]
 
 const HINTS: Partial<Record<ManualMovementType, string>> = {
-  entrada_inicial: 'Para cargar el stock que ya tienes antes de empezar a usar el sistema.',
-  entrada_manual: 'Mercancía que llegó sin un pedido registrado. El costo actualiza el promedio.',
+  entrada_inicial:
+    'Para cargar el stock que ya tenías antes de usar el sistema. La mercancía que compras se registra en Compras.',
   merma: 'Producto que se perdió (derramado, roto al servir).',
   cortesia: 'Producto regalado a un cliente. Cuenta como costo, no como venta.',
   consumo_propio: 'Lo que consumes tú o tu equipo.',
   ajuste_positivo:
-    'Corrige un faltante registrado por error. Para cuadrar todo, usa el conteo físico.',
+    'Corrige un faltante registrado por error. Para cuadrar todo, usa la revisión de inventario.',
   ajuste_negativo: 'Corrige un sobrante registrado por error.',
 }
 
@@ -69,7 +70,7 @@ function MovementForm({ product, onDone }: { product: Product; onDone: () => voi
   const { user } = useAuth()
   const [opId] = useState(newOpId)
   const [type, setType] = useState<ManualMovementType>(
-    product.stock === 0 ? 'entrada_inicial' : 'entrada_manual',
+    product.stock === 0 ? 'entrada_inicial' : 'merma',
   )
   const [quantity, setQuantity] = useState<number | null>(null)
   const [unitCost, setUnitCost] = useState<number | null>(

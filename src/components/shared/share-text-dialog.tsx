@@ -17,19 +17,23 @@ export function ShareTextDialog({
   text,
   open,
   onOpenChange,
+  onShared,
 }: {
   title: string
   description: string
   text: string
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Se llama al copiar, compartir o abrir WhatsApp (p. ej. para marcar un pedido como enviado). */
+  onShared?: () => void
 }) {
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(text)
-      toast.success('Resumen copiado')
+      toast.success('Texto copiado')
+      onShared?.()
     } catch {
       toast.error('No se pudo copiar. Selecciona el texto y cópialo.')
     }
@@ -38,6 +42,7 @@ export function ShareTextDialog({
   async function share() {
     try {
       await navigator.share({ text })
+      onShared?.()
     } catch (e) {
       if ((e as Error).name !== 'AbortError') toast.error('No se pudo compartir.')
     }
@@ -70,6 +75,7 @@ export function ShareTextDialog({
                 href={`https://wa.me/?text=${encodeURIComponent(text)}`}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={() => onShared?.()}
               >
                 <MessageCircle aria-hidden />
                 WhatsApp

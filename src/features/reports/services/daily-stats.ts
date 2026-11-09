@@ -33,6 +33,9 @@ const NUM_KEYS = [
   'orderLosses',
   'invLosses',
   'invGains',
+  'purchases',
+  'supplierPaid',
+  'supplierPaidCash',
 ] as const
 
 const incMap = (m: Partial<Record<string, number>> | undefined) =>
@@ -111,6 +114,9 @@ export interface DailyStats {
   orderLosses: number
   invLosses: number
   invGains: number
+  purchases: number
+  supplierPaid: number
+  supplierPaidCash: number
   byMethod: Record<string, number>
   byChannel: Record<string, number>
   byLossType: Partial<Record<InventoryLossKey, number>>
@@ -131,6 +137,9 @@ export function dailyStatsFromDoc(businessDate: string, x: Record<string, unknow
     orderLosses: Number(x.orderLosses ?? 0),
     invLosses: Number(x.invLosses ?? 0),
     invGains: Number(x.invGains ?? 0),
+    purchases: Number(x.purchases ?? 0),
+    supplierPaid: Number(x.supplierPaid ?? 0),
+    supplierPaidCash: Number(x.supplierPaidCash ?? 0),
     byMethod: numMap(x.byMethod),
     byChannel: numMap(x.byChannel),
     byLossType: numMap(x.byLossType),

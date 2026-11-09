@@ -60,6 +60,11 @@ export interface DailyStatsDelta {
   /** Sobrantes: ajustes positivos y conteos con más unidades de las del sistema, a costo. */
   invGains?: Cop
   byLossType?: Partial<Record<InventoryLossKey, Cop>>
+  /** Fase 7 (R-COM-06): mercancía recibida a costo real; no es gasto, sube el inventario. */
+  purchases?: Cop
+  /** Fase 7: pagos a proveedores (para el flujo de caja, F-13); `supplierPaidCash` salió de la caja. */
+  supplierPaid?: Cop
+  supplierPaidCash?: Cop
   /** Ventas por hora de Bogotá ("0"…"23") según la hora en que se confirmó cada ronda (D-221). */
   byHour?: Record<string, Cop>
 }
@@ -200,6 +205,9 @@ export function mergeDeltas(...deltas: DailyStatsDelta[]): DailyStatsDelta {
     'orderLosses',
     'invLosses',
     'invGains',
+    'purchases',
+    'supplierPaid',
+    'supplierPaidCash',
   ] as const
   for (const d of deltas) {
     for (const k of nums) if (d[k] !== undefined) out[k] = (out[k] ?? 0) + d[k]!
@@ -228,6 +236,16 @@ export function mergeDeltas(...deltas: DailyStatsDelta[]): DailyStatsDelta {
   return out
 }
 
+/** Fase 7 (R-COM-06): mercancía recibida, a costo real. */
+export function purchaseStats(total: Cop): DailyStatsDelta {
+  return total > 0 ? { purchases: total } : {}
+}
+
+/** Fase 7: pago a un proveedor; si salió de la caja también suma a `supplierPaidCash`. */
+export function supplierPaymentStats(amount: Cop, fromCash: boolean): DailyStatsDelta {
+  return { supplierPaid: amount, ...(fromCash ? { supplierPaidCash: amount } : {}) }
+}
+
 // ---------------------------------------------------------------------------
 // Recálculo de un día completo (F6-04, D-221)
 // ---------------------------------------------------------------------------
@@ -239,13 +257,22 @@ export interface RebuildInput {
   orders: readonly { status: string; closedAt: Date | null; lines: readonly StatsLine[] }[]
   payments: readonly { method: StatsMethod; channel: StatsChannel | null; amount: Cop }[]
   movements: readonly { type: string; qty: number; unitCost: Cop }[]
+  /** Fase 7: recepciones y pagos a proveedores de la jornada. */
+  receptions?: readonly { total: Cop }[]
+  supplierPayments?: readonly { amount: Cop; fromCash: boolean }[]
 }
 
 /**
  * Estadísticas completas de una jornada a partir de sus cuentas, pagos y movimientos.
  * Debe dar lo mismo que la suma de los deltas que se escribieron en el momento.
  */
-export function buildDayStats({ orders, payments, movements }: RebuildInput): DailyStatsDelta {
+export function buildDayStats({
+  orders,
+  payments,
+  movements,
+  receptions = [],
+  supplierPayments = [],
+}: RebuildInput): DailyStatsDelta {
   const deltas: DailyStatsDelta[] = []
   for (const o of orders) {
     if (o.status === 'pagada') deltas.push(paidOrderStats(o.lines, o.closedAt ?? undefined))
@@ -254,6 +281,8 @@ export function buildDayStats({ orders, payments, movements }: RebuildInput): Da
   }
   for (const p of payments) deltas.push(paymentStats(p))
   for (const m of movements) deltas.push(inventoryMovementStats(m.type, m.qty, m.unitCost))
+  for (const r of receptions) deltas.push(purchaseStats(r.total))
+  for (const p of supplierPayments) deltas.push(supplierPaymentStats(p.amount, p.fromCash))
   return mergeDeltas(...deltas)
 }
 

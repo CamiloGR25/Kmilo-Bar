@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { MOVEMENT_LABELS } from '../domain/movements'
 import { stockLevel } from '../domain/stock'
 import { useProductMovements } from '../services/inventory-service'
+import { PurchasePrices } from '@/features/purchases/components/purchase-prices'
 import { MovementDialog } from './movement-dialog'
 
 /** Kardex: historial de movimientos de un producto (R-INV-01, el stock es su suma). */
@@ -65,7 +66,7 @@ export function KardexPage() {
         }
       />
 
-      <dl className="grid grid-cols-2 divide-border rounded-xl border bg-card sm:grid-cols-4 sm:divide-x max-sm:[&>div:nth-child(-n+2)]:border-b">
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">
         <Stat label="Stock" value={String(product.stock)}>
           <StockIndicator
             level={stockLevel(product.stock, product.minStock, near)}
@@ -73,9 +74,19 @@ export function KardexPage() {
           />
         </Stat>
         <Stat label="Mínimo" value={String(product.minStock)} />
-        <Stat label="Costo promedio" value={formatCop(product.avgCost)} />
-        <Stat label="Valor a costo" value={formatCop(product.stock * product.avgCost)} />
+        <Stat label="Costo promedio" value={formatCop(product.avgCost)}>
+          <span className="text-meta text-subtle-foreground">
+            Total a costo {formatCop(product.stock * product.avgCost)}
+          </span>
+        </Stat>
+        <Stat label="Precio de venta" value={formatCop(product.salePrice)}>
+          <span className="text-meta text-subtle-foreground">
+            Total a la venta {formatCop(product.stock * product.salePrice)}
+          </span>
+        </Stat>
       </dl>
+
+      <PurchasePrices movements={movements.data ?? []} />
 
       <section className="flex flex-col gap-4">
         <h2 className="text-title font-semibold">Movimientos</h2>
@@ -136,7 +147,7 @@ function Stat({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-1 px-5 py-4">
+    <div className="flex min-w-0 flex-col gap-1 bg-card px-5 py-4">
       <dt className="text-label text-muted-foreground">{label}</dt>
       <dd className="tabular text-figure font-semibold tracking-tight">{value}</dd>
       {children && <dd>{children}</dd>}

@@ -10,7 +10,7 @@ import { formatCop } from '@/domain/money'
 import { CategoryIcon } from '@/features/products/components/category-icon'
 import type { Product } from '@/features/products/domain/catalog'
 import { cn } from '@/lib/utils'
-import { inventoryValue, type StockLevel } from '../domain/stock'
+import { inventorySaleValue, inventoryValue, type StockLevel } from '../domain/stock'
 import { useInventory } from '../hooks/use-inventory'
 import { MovementDialog } from './movement-dialog'
 import { ReviewButton, ReviewPanel } from './review-panel'
@@ -49,6 +49,7 @@ export function InventoryPage() {
   }, [items, level, search, categoryId])
 
   const total = inventoryValue((items ?? []).map((i) => i.product))
+  const saleTotal = inventorySaleValue((items ?? []).map((i) => i.product))
 
   return (
     <Page wide>
@@ -57,8 +58,14 @@ export function InventoryPage() {
         description={
           items ? (
             <>
-              Valor del inventario a costo:{' '}
-              <span className="tabular font-semibold text-foreground">{formatCop(total)}</span>
+              Valor a costo{' '}
+              <span className="tabular font-semibold text-foreground">{formatCop(total)}</span>, a
+              la venta{' '}
+              <span className="tabular font-semibold text-foreground">{formatCop(saleTotal)}</span>.
+              Ganancia si se vende todo:{' '}
+              <span className="tabular font-semibold text-success">
+                {formatCop(saleTotal - total)}
+              </span>
             </>
           ) : undefined
         }
@@ -167,7 +174,8 @@ export function InventoryPage() {
                 <span className="min-w-0 flex-1">
                   <span className="line-clamp-2 block leading-snug font-medium">{p.name}</span>
                   <span className="block text-meta text-subtle-foreground">
-                    Mínimo {p.minStock}, valor {formatCop(p.stock * p.avgCost)}
+                    Mínimo {p.minStock}, a costo {formatCop(p.stock * p.avgCost)}, a la venta{' '}
+                    {formatCop(p.stock * p.salePrice)}
                   </span>
                 </span>
                 <span className="flex flex-col items-end gap-1">

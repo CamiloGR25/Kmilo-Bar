@@ -21,9 +21,13 @@ import { dailyStatsDocument } from './daily-stats'
 const STATS_MOVEMENT_TYPES = [...INVENTORY_LOSS_KEYS, 'ajuste_positivo']
 
 async function rebuildDay(uid: string, date: BusinessDate) {
-  const [orders, payments, movements] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), where('businessDate', '==', date))),
-    getDocs(query(collection(db, 'payments'), where('businessDate', '==', date))),
+  const byDate = (col: string) =>
+    getDocs(query(collection(db, col), where('businessDate', '==', date)))
+  const [orders, payments, receptions, supplierPayments, movements] = await Promise.all([
+    byDate('orders'),
+    byDate('payments'),
+    byDate('receptions'),
+    byDate('supplierPayments'),
     getDocs(
       query(
         collection(db, 'inventoryMovements'),
@@ -38,6 +42,11 @@ async function rebuildDay(uid: string, date: BusinessDate) {
       method: d.data().method as StatsMethod,
       channel: (d.data().channel as StatsChannel | null) ?? null,
       amount: Number(d.data().amount ?? 0),
+    })),
+    receptions: receptions.docs.map((d) => ({ total: Number(d.data().total ?? 0) })),
+    supplierPayments: supplierPayments.docs.map((d) => ({
+      amount: Number(d.data().amount ?? 0),
+      fromCash: d.data().fromCash === true,
     })),
     movements: movements.docs.map((d) => ({
       type: String(d.data().type),

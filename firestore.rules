@@ -102,7 +102,13 @@ service cloud.firestore {
     function validProduct(d) {
       return d.keys().hasOnly(['name', 'description', 'categoryId', 'unit', 'stock', 'minStock',
           'avgCost', 'lastPurchaseCost', 'salePrice', 'pricingMode', 'markupBp', 'active',
-          'lastMovementId', 'createdAt', 'updatedAt'])
+          'lastMovementId', 'supplierId', 'purchaseUnit', 'unitsPerPurchase', 'createdAt',
+          'updatedAt'])
+        // Fase 7 (D-223): proveedor habitual y unidad de compra opcionales (los dos o ninguno).
+        && (d.get('supplierId', null) == null || isText(d.supplierId, 1, 60))
+        && ((d.get('purchaseUnit', null) == null && d.get('unitsPerPurchase', null) == null)
+          || (isText(d.purchaseUnit, 1, 30) && isInt(d.unitsPerPurchase)
+            && d.unitsPerPurchase >= 2 && d.unitsPerPurchase <= 1000))
         && isText(d.name, 1, 80)
         && d.description is string && d.description.size() <= 300
         && isText(d.categoryId, 1, 60)
@@ -134,7 +140,7 @@ service cloud.firestore {
       let after = getAfter(productPath).data;
       return d.keys().hasOnly(['productId', 'productName', 'type', 'qty', 'stockBefore',
           'stockAfter', 'avgCostBefore', 'avgCostAfter', 'unitCost', 'sourceType', 'sourceId',
-          'reason', 'businessDate', 'uid', 'createdAt'])
+          'supplierId', 'reason', 'businessDate', 'uid', 'createdAt'])
         && isText(d.productId, 1, 60)
         && d.productName is string
         && d.type in ['entrada_inicial', 'entrada_manual', 'entrada_compra', 'venta',
@@ -157,7 +163,21 @@ service cloud.firestore {
         && after.lastMovementId == movId
         // Fase 4: ventas y cancelaciones solo desde una cuenta, con la línea que les corresponde.
         && ((d.type in ['venta', 'cancelacion_item']) == (d.sourceType == 'venta'))
-        && (d.sourceType != 'venta' || saleMovementOk(movId, d));
+        && (d.sourceType != 'venta' || saleMovementOk(movId, d))
+        // Fase 7 (R-COM-02): las compras solo entran desde una recepción, con su línea.
+        && ((d.type == 'entrada_compra') == (d.sourceType == 'compra'))
+        && (d.sourceType != 'compra' || purchaseMovementOk(movId, d));
+    }
+
+    // `rec_{recepción}_{línea}`: cantidad y costo de la línea de la recepción del mismo commit.
+    function purchaseMovementOk(movId, d) {
+      let parts = movId.split('_');
+      let line = getAfter(docPath('receptions', d.sourceId)).data.lines[parts[2]];
+      return parts.size() == 3 && parts[0] == 'rec' && parts[1] == d.sourceId
+        && line.productId == d.productId
+        && line.qty == d.qty
+        && line.unitCost == d.unitCost
+        && isText(d.supplierId, 1, 60);
     }
 
     // R-VEN-03 / R-VEN-05: `sale_{orderId}_{lineId}` y `cancel_{orderId}_{lineId}_{opId}`.
@@ -205,13 +225,17 @@ service cloud.firestore {
           || (id == 'cashSessions' && request.resource.data.keys().hasOnly(['last', 'openSessionId'])
               && request.resource.data.last == 0 && request.resource.data.openSessionId == null)
           || (id == 'inventoryReview' && validReview(request.resource.data)
-              && request.resource.data.inProgressId == null));
+              && request.resource.data.inProgressId == null)
+          || (id == 'purchaseOrders' && request.resource.data.keys().hasOnly(['last'])
+              && request.resource.data.last == 0));
       allow update: if isAdmin()
         && ((id == 'orders' && request.resource.data.keys().hasOnly(['last'])
               && request.resource.data.last == resource.data.last + 1)
           || (id == 'cashSessions' && (cashOpening() || cashClosing()))
           || (id == 'inventoryReview' && validReview(request.resource.data)
-              && reviewTransition(resource.data, request.resource.data)));
+              && reviewTransition(resource.data, request.resource.data))
+          || (id == 'purchaseOrders' && request.resource.data.keys().hasOnly(['last'])
+              && request.resource.data.last == resource.data.last + 1));
       allow delete: if false;
     }
 
@@ -585,12 +609,171 @@ service cloud.firestore {
           'refId', 'uid', 'createdAt'])
         && d.sessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
         && d.businessDate == get(docPath('cashSessions', d.sessionId)).data.businessDate
-        && d.type in ['entrada_extra', 'retiro_dueno', 'correccion']
+        && d.type in ['entrada_extra', 'retiro_dueno', 'correccion', 'pago_proveedor']
         && isInt(d.amount) && d.amount != 0
         && (d.type != 'entrada_extra' || d.amount > 0)
         && (d.type != 'retiro_dueno' || d.amount < 0)
         && isText(d.reason, 3, 200)
-        && d.refType == null && d.refId == null
+        // Fase 7 (D-223 #4): el pago a un proveedor "de la caja" sale con su pago en el mismo commit.
+        && (d.type == 'pago_proveedor'
+          ? (d.refType == 'supplierPayment' && isText(d.refId, 1, 60)
+            && getAfter(docPath('supplierPayments', d.refId)).data.amount == -d.amount
+            && getAfter(docPath('supplierPayments', d.refId)).data.cashSessionId == d.sessionId)
+          : (d.refType == null && d.refId == null))
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time;
+    }
+
+    // ================================================================ Fase 7 (D-223)
+
+    // ---------------------------------------------------------------- Proveedores
+    // No se borran: se desactivan. `lastCosts` lo actualiza la recepción.
+    match /suppliers/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validSupplier(request.resource.data)
+        && request.resource.data.lastCosts.size() == 0;
+      allow update: if isAdmin() && validSupplier(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+
+    function validSupplier(d) {
+      return d.keys().hasOnly(['name', 'contactName', 'phone', 'notes', 'active', 'lastCosts',
+          'createdAt', 'updatedAt'])
+        && isText(d.name, 2, 80)
+        && d.contactName is string && d.contactName.size() <= 80
+        && d.phone is string && d.phone.size() <= 30
+        && d.notes is string && d.notes.size() <= 300
+        && d.active is bool
+        && d.lastCosts is map
+        && d.createdAt is timestamp
+        && d.updatedAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Pedidos de compra
+    // R-COM-01. `items` es un mapa por línea. Lo recibido sube solo con una recepción nueva del
+    // mismo commit (R-COM-02) y lo pagado solo con un pago nuevo del mismo commit (R-COM-05).
+    match /purchaseOrders/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validPurchase(request.resource.data)
+        && request.resource.data.status in ['borrador', 'solicitado']
+        && request.resource.data.receivedTotal == 0
+        && request.resource.data.paidTotal == 0
+        && request.resource.data.get('lastReceptionId', null) == null
+        && request.resource.data.get('lastPaymentId', null) == null
+        && request.resource.data.number == getAfter(docPath('counters', 'purchaseOrders')).data.last
+        && request.resource.data.number == get(docPath('counters', 'purchaseOrders')).data.last + 1;
+      allow update: if isAdmin() && validPurchase(request.resource.data)
+        && request.resource.data.number == resource.data.number
+        && request.resource.data.kind == resource.data.kind
+        && purchaseTransition(id, resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    function validPurchase(d) {
+      return d.keys().hasOnly(['number', 'kind', 'supplierId', 'supplierName', 'status',
+          'shortClosed', 'items', 'estTotal', 'receivedTotal', 'paidTotal', 'paymentStatus',
+          'expectedDate', 'notes', 'lastReceptionId', 'lastPaymentId', 'createdAt', 'requestedAt',
+          'closedAt', 'updatedAt'])
+        && isInt(d.number) && d.number > 0
+        && d.kind in ['pedido', 'directa']
+        && isText(d.supplierId, 1, 60)
+        && isText(d.supplierName, 1, 80)
+        && d.status in ['borrador', 'solicitado', 'parcial', 'recibido', 'cancelado']
+        && d.shortClosed is bool
+        && d.items is map && d.items.size() >= 1 && d.items.size() <= 60
+        && isNonNegInt(d.estTotal)
+        && isNonNegInt(d.receivedTotal)
+        && isNonNegInt(d.paidTotal)
+        && d.paidTotal <= d.receivedTotal
+        && d.paymentStatus in ['pendiente', 'abonado', 'pagado']
+        && (d.paymentStatus == 'pendiente') == (d.paidTotal == 0)
+        && (d.paymentStatus != 'pagado' || d.paidTotal == d.receivedTotal)
+        && (d.expectedDate == null || isDate(d.expectedDate))
+        && d.notes is string && d.notes.size() <= 300
+        && d.updatedAt == request.time;
+    }
+
+    function purchaseTransition(id, a, b) {
+      let changed = b.diff(a).affectedKeys();
+      let receiving = b.lastReceptionId != a.lastReceptionId;
+      let paying = b.lastPaymentId != a.lastPaymentId;
+      return
+        // Editar un borrador, enviarlo o cancelarlo.
+        (a.status == 'borrador' && b.status in ['borrador', 'solicitado', 'cancelado']
+          && !receiving && !paying && b.receivedTotal == 0)
+        // Cancelar un pedido solicitado sin nada recibido.
+        || (a.status == 'solicitado' && b.status == 'cancelado' && a.receivedTotal == 0
+          && changed.hasOnly(['status', 'closedAt', 'updatedAt']))
+        // Cerrar con faltante.
+        || (a.status == 'parcial' && b.status == 'recibido' && b.shortClosed == true
+          && changed.hasOnly(['status', 'shortClosed', 'closedAt', 'updatedAt']))
+        // Recibir (R-COM-02): con una recepción nueva del mismo commit y su total.
+        || (a.status in ['solicitado', 'parcial'] && !a.shortClosed && receiving && !paying
+          && b.status in ['parcial', 'recibido']
+          && changed.hasOnly(['items', 'receivedTotal', 'paymentStatus', 'status',
+            'lastReceptionId', 'closedAt', 'updatedAt'])
+          && !exists(docPath('receptions', b.lastReceptionId))
+          && b.receivedTotal
+            == a.receivedTotal + getAfter(docPath('receptions', b.lastReceptionId)).data.total)
+        // Pagar (R-COM-05): con un pago nuevo del mismo commit.
+        || (paying && !receiving
+          && changed.hasOnly(['paidTotal', 'paymentStatus', 'lastPaymentId', 'updatedAt'])
+          && !exists(docPath('supplierPayments', b.lastPaymentId))
+          && b.paidTotal
+            == a.paidTotal + getAfter(docPath('supplierPayments', b.lastPaymentId)).data.amount);
+    }
+
+    // ---------------------------------------------------------------- Recepciones (inmutables)
+    match /receptions/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validReception(id, request.resource.data);
+      allow update, delete: if false;
+    }
+
+    function validReception(id, d) {
+      let order = getAfter(docPath('purchaseOrders', d.purchaseOrderId)).data;
+      return d.keys().hasOnly(['purchaseOrderId', 'supplierId', 'lines', 'total', 'businessDate',
+          'notes', 'uid', 'createdAt'])
+        && isText(d.purchaseOrderId, 1, 60)
+        && order.lastReceptionId == id
+        && order.supplierId == d.supplierId
+        && d.lines is map && d.lines.size() >= 1 && d.lines.size() <= 4
+        && isNonNegInt(d.total)
+        && isDate(d.businessDate)
+        && d.notes is string && d.notes.size() <= 300
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Pagos a proveedores (inmutables)
+    match /supplierPayments/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validSupplierPayment(id, request.resource.data);
+      allow update, delete: if false;
+    }
+
+    function validSupplierPayment(id, d) {
+      let order = getAfter(docPath('purchaseOrders', d.purchaseOrderId)).data;
+      return d.keys().hasOnly(['purchaseOrderId', 'supplierId', 'amount', 'method', 'channel',
+          'fromCash', 'cashSessionId', 'businessDate', 'notes', 'uid', 'createdAt'])
+        && isText(d.purchaseOrderId, 1, 60)
+        && order.lastPaymentId == id
+        && order.supplierId == d.supplierId
+        && isInt(d.amount) && d.amount > 0
+        && d.method in ['efectivo', 'transferencia']
+        && (d.method == 'transferencia'
+          ? d.channel in ['nequi', 'daviplata', 'banco', 'breb_qr_llave', 'otro']
+          : d.channel == null)
+        && d.fromCash is bool
+        // D-223 #4: "de la caja" es efectivo de la caja abierta, con su salida en el mismo commit.
+        && (d.fromCash
+          ? (d.method == 'efectivo' && d.cashSessionId != null
+            && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+            && existsAfter(docPath('cashMovements', 'sp-' + id)))
+          : d.cashSessionId == null)
+        && isDate(d.businessDate)
+        && d.notes is string && d.notes.size() <= 300
         && d.uid == request.auth.uid
         && d.createdAt == request.time;
     }
@@ -606,8 +789,8 @@ service cloud.firestore {
 
     function validDailyStats(date, d) {
       return d.keys().hasOnly(['businessDate', 'salesGross', 'cogs', 'ordersCount', 'collected',
-          'orderLosses', 'invLosses', 'invGains', 'byMethod', 'byChannel', 'byLossType', 'byHour',
-          'byProduct', 'byCategory', 'updatedAt'])
+          'orderLosses', 'invLosses', 'invGains', 'purchases', 'supplierPaid', 'supplierPaidCash',
+          'byMethod', 'byChannel', 'byLossType', 'byHour', 'byProduct', 'byCategory', 'updatedAt'])
         && d.businessDate == date
         && isNonNegInt(d.get('salesGross', 0))
         && isNonNegInt(d.get('cogs', 0))
@@ -616,6 +799,9 @@ service cloud.firestore {
         && isNonNegInt(d.get('orderLosses', 0))
         && isNonNegInt(d.get('invLosses', 0))
         && isNonNegInt(d.get('invGains', 0))
+        && isNonNegInt(d.get('purchases', 0))
+        && isNonNegInt(d.get('supplierPaid', 0))
+        && isNonNegInt(d.get('supplierPaidCash', 0))
         && d.get('byLossType', {}) is map
         && d.get('byHour', {}) is map
         && d.get('byMethod', {}) is map

@@ -67,3 +67,8 @@ export function suggestedMinStock(
 export function inventoryValue(items: { stock: number; avgCost: Cop }[]): Cop {
   return items.reduce((acc, p) => acc + p.stock * p.avgCost, 0)
 }
+
+/** Valor del inventario al precio de venta: lo que entraría si se vende todo. */
+export function inventorySaleValue(items: { stock: number; salePrice: Cop }[]): Cop {
+  return items.reduce((acc, p) => acc + p.stock * p.salePrice, 0)
+}

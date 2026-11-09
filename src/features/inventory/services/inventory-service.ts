@@ -49,6 +49,8 @@ export interface InventoryMovement {
   unitCost: number
   reason: string | null
   businessDate: string
+  /** Proveedor de una compra (Fase 7). */
+  supplierId: string | null
   createdAt: Date | null
 }
 
@@ -67,7 +69,7 @@ export function writeMovement(
   type: MovementType,
   result: MovementResult,
   reason: string | null,
-  source: { type: 'ajuste' | 'conteo' | 'venta'; id: string },
+  source: { type: 'ajuste' | 'conteo' | 'venta' | 'compra'; id: string; supplierId?: string },
 ) {
   const product = productSnap.data()!
   const productRef = productSnap.ref
@@ -93,6 +95,8 @@ export function writeMovement(
     unitCost: result.unitCost,
     sourceType: source.type,
     sourceId: source.id,
+    // Fase 7: la compra guarda el proveedor para comparar precios (D-223 #8).
+    ...(source.supplierId ? { supplierId: source.supplierId } : {}),
     reason,
     businessDate: businessDateOf(new Date()),
     uid,
@@ -104,7 +108,7 @@ export function writeMovement(
       field: 'avgCost',
       oldValue: result.avgCostBefore,
       newValue: result.avgCostAfter,
-      source: 'ajuste',
+      source: source.type === 'compra' ? 'recepcion' : 'ajuste',
       reason: null,
       at: now,
     })
@@ -247,6 +251,7 @@ function movementFromDoc(id: string, x: Record<string, unknown>): InventoryMovem
     unitCost: Number(x.unitCost),
     reason: (x.reason as string | null) ?? null,
     businessDate: String(x.businessDate ?? ''),
+    supplierId: typeof x.supplierId === 'string' ? x.supplierId : null,
     createdAt: toDate(x.createdAt),
   }
 }

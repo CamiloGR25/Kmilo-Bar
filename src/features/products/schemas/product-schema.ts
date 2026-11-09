@@ -26,6 +26,16 @@ export const productFormSchema = z
       .min(0, 'No puede ser negativo.')
       .max(100_000, 'Demasiado alto.'),
     active: z.boolean(),
+    /** Proveedor habitual ('' = ninguno). */
+    supplierId: z.string(),
+    /** Unidad de compra ('' = se compra por unidad). */
+    purchaseUnit: z.string().trim().max(30, 'Máximo 30 caracteres.'),
+    unitsPerPurchase: z
+      .number({ error: 'Escribe cuántas unidades trae.' })
+      .int('Debe ser un número entero.')
+      .min(2, 'Debe traer al menos 2 unidades.')
+      .max(1000, 'Demasiado alto.')
+      .nullable(),
   })
   .superRefine((v, ctx) => {
     if (v.pricingMode === 'manual' && v.manualPrice === null) {
@@ -33,6 +43,13 @@ export const productFormSchema = z
         code: 'custom',
         path: ['manualPrice'],
         message: 'Escribe el precio de venta.',
+      })
+    }
+    if (v.purchaseUnit.trim() && v.unitsPerPurchase === null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['unitsPerPurchase'],
+        message: 'Escribe cuántas unidades trae.',
       })
     }
     if (v.markupMode === 'custom' && v.markupBp === null) {

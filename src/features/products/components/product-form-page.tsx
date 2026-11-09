@@ -19,6 +19,8 @@ import { useAuth } from '@/features/auth/use-auth'
 import { Section } from '@/features/settings/components/settings-page'
 import type { Settings } from '@/features/settings/domain/settings'
 import { useSettings } from '@/features/settings/services/settings-service'
+import type { Supplier } from '@/features/purchases/domain/purchases'
+import { useSuppliers } from '@/features/purchases/services/purchases-service'
 import { cn } from '@/lib/utils'
 import { UNITS, type Category, type Product } from '../domain/catalog'
 import { productFormSchema, type ProductFormValues } from '../schemas/product-schema'
@@ -38,6 +40,7 @@ export function ProductFormPage() {
   const products = useProducts()
   const categories = useCategories()
   const settings = useSettings()
+  const suppliers = useSuppliers()
 
   const product = isNew ? null : (products.data?.find((p) => p.id === id) ?? null)
   const loading = products.loading || categories.loading || settings.loading
@@ -60,6 +63,7 @@ export function ProductFormPage() {
           product={product}
           categories={categories.data ?? []}
           settings={settings.data.settings}
+          suppliers={suppliers.data ?? []}
           existingNames={(products.data ?? [])
             .filter((p) => p.id !== product?.id)
             .map((p) => p.name.trim().toLowerCase())}
@@ -83,6 +87,9 @@ function defaults(product: Product | null, settings: Settings, categories: Categ
       manualPrice: null,
       minStock: settings.defaultMinStock,
       active: true,
+      supplierId: '',
+      purchaseUnit: '',
+      unitsPerPurchase: null,
     } satisfies Record<keyof ProductFormValues, unknown>
   }
   return {
@@ -97,6 +104,9 @@ function defaults(product: Product | null, settings: Settings, categories: Categ
     manualPrice: product.pricingMode === 'manual' ? product.salePrice : null,
     minStock: product.minStock,
     active: product.active,
+    supplierId: product.supplierId ?? '',
+    purchaseUnit: product.purchaseUnit ?? '',
+    unitsPerPurchase: product.unitsPerPurchase,
   } satisfies ProductFormValues
 }
 
@@ -104,11 +114,13 @@ function ProductForm({
   product,
   categories,
   settings,
+  suppliers,
   existingNames,
 }: {
   product: Product | null
   categories: Category[]
   settings: Settings
+  suppliers: Supplier[]
   existingNames: string[]
 }) {
   const navigate = useNavigate()
@@ -307,6 +319,61 @@ function ProductForm({
               )}
             </div>
           )}
+        </Section>
+
+        <Section title="Compra">
+          <FormField id="supplierId" label="Proveedor habitual (opcional)">
+            <NativeSelect id="supplierId" {...register('supplierId')}>
+              <option value="">Sin proveedor habitual</option>
+              {suppliers
+                .filter((s) => s.active || s.id === product?.supplierId)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+            </NativeSelect>
+          </FormField>
+          <p className="-mt-3 text-meta text-subtle-foreground">
+            "Qué pedir" arma el pedido de este producto con este proveedor.
+          </p>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <FormField
+              id="purchaseUnit"
+              label="Se compra por (opcional)"
+              error={errors.purchaseUnit?.message}
+            >
+              <Input
+                id="purchaseUnit"
+                placeholder="Canasta, paca, caja…"
+                maxLength={30}
+                {...register('purchaseUnit')}
+              />
+            </FormField>
+            <FormField
+              id="unitsPerPurchase"
+              label="Unidades que trae"
+              error={errors.unitsPerPurchase?.message}
+            >
+              <Controller
+                control={control}
+                name="unitsPerPurchase"
+                render={({ field }) => (
+                  <IntegerInput
+                    id="unitsPerPurchase"
+                    suffix="unid."
+                    disabled={!v.purchaseUnit?.trim()}
+                    value={field.value ?? null}
+                    onChange={(n) => field.onChange(n)}
+                  />
+                )}
+              />
+            </FormField>
+          </div>
+          <p className="-mt-3 text-meta text-subtle-foreground">
+            Ejemplo: canasta de 30. Al comprar puedes escribir canastas y la app suma las unidades.
+            Déjalo vacío si se compra por unidad.
+          </p>
         </Section>
 
         <Section title="Inventario">

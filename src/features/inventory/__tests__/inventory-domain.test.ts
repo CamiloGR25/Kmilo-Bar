@@ -8,6 +8,7 @@ import {
   weightedAverageCost,
 } from '../domain/movements'
 import {
+  inventorySaleValue,
   inventoryValue,
   isAlert,
   recommendedOrderQty,
@@ -168,5 +169,13 @@ describe('F-14 valor del inventario', () => {
         { stock: 2, avgCost: 48000 },
       ]),
     ).toBe(120000)
+  })
+  it('valor a la venta: stock × precio de venta', () => {
+    expect(
+      inventorySaleValue([
+        { stock: 10, salePrice: 4500 },
+        { stock: 2, salePrice: 90000 },
+      ]),
+    ).toBe(225000)
   })
 })

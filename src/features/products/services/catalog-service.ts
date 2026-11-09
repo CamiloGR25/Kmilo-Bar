@@ -76,6 +76,9 @@ export function productFromDoc(id: string, x: Record<string, unknown>): Product 
     pricingMode: x.pricingMode === 'manual' ? 'manual' : 'auto',
     markupBp: typeof x.markupBp === 'number' ? x.markupBp : null,
     active: x.active !== false,
+    supplierId: typeof x.supplierId === 'string' ? x.supplierId : null,
+    purchaseUnit: typeof x.purchaseUnit === 'string' ? x.purchaseUnit : null,
+    unitsPerPurchase: typeof x.unitsPerPurchase === 'number' ? x.unitsPerPurchase : null,
     createdAt: toDate(x.createdAt),
     updatedAt: toDate(x.updatedAt),
   }
@@ -257,6 +260,12 @@ function productFields(values: ProductFormValues, settings: Settings) {
     pricingMode: values.pricingMode,
     markupBp: values.markupMode === 'custom' ? values.markupBp : null,
     active: values.active,
+    supplierId: values.supplierId || null,
+    // D-223 #2: la unidad de compra va completa (nombre y unidades) o no va.
+    purchaseUnit:
+      values.purchaseUnit.trim() && values.unitsPerPurchase ? values.purchaseUnit.trim() : null,
+    unitsPerPurchase:
+      values.purchaseUnit.trim() && values.unitsPerPurchase ? values.unitsPerPurchase : null,
   }
 }
 
@@ -308,6 +317,9 @@ export async function updateProduct(
     pricingMode: product.pricingMode,
     markupBp: product.markupBp,
     active: product.active,
+    supplierId: product.supplierId,
+    purchaseUnit: product.purchaseUnit,
+    unitsPerPurchase: product.unitsPerPurchase,
   }
   const diff = changedFields(before, fields)
   if (!diff) return

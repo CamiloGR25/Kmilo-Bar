@@ -82,6 +82,9 @@ function useInitialData() {
       // Fase 6: revisión de inventario cada 4 meses (R-INV-11), contando desde hoy.
       .then(() => import('@/features/inventory/services/review-service'))
       .then(({ ensureInventoryReview }) => ensureInventoryReview(uid))
+      // Fase 7: consecutivo de pedidos de compra.
+      .then(() => import('@/features/purchases/services/purchases-service'))
+      .then(({ ensurePurchasesSetup }) => ensurePurchasesSetup())
       .catch((e: Error) => toast.error(`No se pudieron preparar los datos: ${e.message}`))
   }, [uid])
 }
