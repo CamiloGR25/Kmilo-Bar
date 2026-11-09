@@ -15,6 +15,12 @@ import { formatCop } from '@/domain/money'
 import { db } from '@/lib/firebase/firestore'
 import { addAudit } from '@/features/audit/services/audit'
 import { orderFromDoc } from '@/features/orders/services/orders-service'
+import {
+  capitalStats,
+  expenseStats,
+  type CapitalType,
+  type ExpenseKind,
+} from '@/features/finance/domain/finance'
 import { dailyStatsDocument } from './daily-stats'
 
 /** Movimientos que afectan las estadísticas (pérdidas y sobrantes). */
@@ -23,19 +29,23 @@ const STATS_MOVEMENT_TYPES = [...INVENTORY_LOSS_KEYS, 'ajuste_positivo']
 async function rebuildDay(uid: string, date: BusinessDate) {
   const byDate = (col: string) =>
     getDocs(query(collection(db, col), where('businessDate', '==', date)))
-  const [orders, payments, receptions, supplierPayments, movements] = await Promise.all([
-    byDate('orders'),
-    byDate('payments'),
-    byDate('receptions'),
-    byDate('supplierPayments'),
-    getDocs(
-      query(
-        collection(db, 'inventoryMovements'),
-        where('businessDate', '==', date),
-        where('type', 'in', STATS_MOVEMENT_TYPES),
+  const [orders, payments, receptions, supplierPayments, expenses, capital, cashMoves, movements] =
+    await Promise.all([
+      byDate('orders'),
+      byDate('payments'),
+      byDate('receptions'),
+      byDate('supplierPayments'),
+      byDate('expenses'),
+      byDate('capitalEntries'),
+      byDate('cashMovements'),
+      getDocs(
+        query(
+          collection(db, 'inventoryMovements'),
+          where('businessDate', '==', date),
+          where('type', 'in', STATS_MOVEMENT_TYPES),
+        ),
       ),
-    ),
-  ])
+    ])
   const full = buildDayStats({
     orders: orders.docs.map((d) => orderFromDoc(d.id, d.data())),
     payments: payments.docs.map((d) => ({
@@ -48,6 +58,18 @@ async function rebuildDay(uid: string, date: BusinessDate) {
       amount: Number(d.data().amount ?? 0),
       fromCash: d.data().fromCash === true,
     })),
+    // Fase 8 (D-226): gastos y capital activos y entradas extraordinarias a la caja.
+    extra: [
+      ...expenses.docs
+        .filter((d) => d.data().status === 'activo')
+        .map((d) => expenseStats(d.data().kind as ExpenseKind, Number(d.data().amount ?? 0))),
+      ...capital.docs
+        .filter((d) => d.data().status === 'activo')
+        .map((d) => capitalStats(d.data().type as CapitalType, Number(d.data().amount ?? 0))),
+      ...cashMoves.docs
+        .filter((d) => d.data().type === 'entrada_extra')
+        .map((d) => ({ cashExtraIn: Number(d.data().amount ?? 0) })),
+    ],
     movements: movements.docs.map((d) => ({
       type: String(d.data().type),
       qty: Number(d.data().qty ?? 0),

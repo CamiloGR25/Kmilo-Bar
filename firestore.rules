@@ -609,17 +609,30 @@ service cloud.firestore {
           'refId', 'uid', 'createdAt'])
         && d.sessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
         && d.businessDate == get(docPath('cashSessions', d.sessionId)).data.businessDate
-        && d.type in ['entrada_extra', 'retiro_dueno', 'correccion', 'pago_proveedor']
+        && d.type in ['entrada_extra', 'retiro_dueno', 'correccion', 'pago_proveedor', 'gasto',
+          'aporte']
         && isInt(d.amount) && d.amount != 0
         && (d.type != 'entrada_extra' || d.amount > 0)
         && (d.type != 'retiro_dueno' || d.amount < 0)
         && isText(d.reason, 3, 200)
-        // Fase 7 (D-223 #4): el pago a un proveedor "de la caja" sale con su pago en el mismo commit.
+        // R-FIN-03: las salidas con origen (proveedor, gasto, capital) nacen con su documento.
         && (d.type == 'pago_proveedor'
           ? (d.refType == 'supplierPayment' && isText(d.refId, 1, 60)
             && getAfter(docPath('supplierPayments', d.refId)).data.amount == -d.amount
             && getAfter(docPath('supplierPayments', d.refId)).data.cashSessionId == d.sessionId)
-          : (d.refType == null && d.refId == null))
+          : d.type == 'gasto'
+            ? (d.refType == 'expense' && isText(d.refId, 1, 60) && d.amount < 0
+              && getAfter(docPath('expenses', d.refId)).data.amount == -d.amount
+              && getAfter(docPath('expenses', d.refId)).data.cashSessionId == d.sessionId)
+            : d.type == 'aporte'
+              ? (d.refType == 'capital' && isText(d.refId, 1, 60) && d.amount > 0
+                && getAfter(docPath('capitalEntries', d.refId)).data.type == 'aporte'
+                && getAfter(docPath('capitalEntries', d.refId)).data.amount == d.amount)
+              : d.refType == 'capital'
+                ? (d.type == 'retiro_dueno' && isText(d.refId, 1, 60)
+                  && getAfter(docPath('capitalEntries', d.refId)).data.type == 'retiro'
+                  && getAfter(docPath('capitalEntries', d.refId)).data.amount == -d.amount)
+                : (d.refType == null && d.refId == null))
         && d.uid == request.auth.uid
         && d.createdAt == request.time;
     }
@@ -778,6 +791,113 @@ service cloud.firestore {
         && d.createdAt == request.time;
     }
 
+    // ================================================================ Fase 8 (D-226)
+
+    // ---------------------------------------------------------------- Categorías de gasto
+    match /expenseCategories/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && validExpenseCategory(request.resource.data);
+      allow delete: if false;
+    }
+
+    function validExpenseCategory(d) {
+      return d.keys().hasOnly(['name', 'kind', 'active', 'sortOrder', 'createdAt', 'updatedAt'])
+        && isText(d.name, 2, 60)
+        && d.kind in ['fijo', 'variable', 'inversion']
+        && d.active is bool
+        && isInt(d.sortOrder)
+        && d.createdAt is timestamp
+        && d.updatedAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Gastos fijos
+    match /fixedExpenses/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && validFixedExpense(request.resource.data);
+      allow delete: if false;
+    }
+
+    function validFixedExpense(d) {
+      return d.keys().hasOnly(['name', 'categoryId', 'amount', 'active', 'createdAt', 'updatedAt'])
+        && isText(d.name, 2, 60)
+        && isText(d.categoryId, 1, 60)
+        && isInt(d.amount) && d.amount > 0 && d.amount <= 100000000
+        && d.active is bool
+        && d.createdAt is timestamp
+        && d.updatedAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Gastos
+    // R-FIN-04: no se borran; solo se anulan con motivo. "De la caja" nace con su salida.
+    match /expenses/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validExpense(id, request.resource.data);
+      allow update: if isAdmin() && voidOk(resource.data, request.resource.data);
+      allow delete: if false;
+    }
+
+    function validExpense(id, d) {
+      return d.keys().hasOnly(['categoryId', 'categoryName', 'kind', 'amount', 'businessDate',
+          'description', 'method', 'fromCash', 'cashSessionId', 'fixedExpenseId', 'period', 'status',
+          'voidReason', 'voidedAt', 'uid', 'createdAt', 'updatedAt'])
+        && isText(d.categoryId, 1, 60)
+        && isText(d.categoryName, 1, 60)
+        && d.kind in ['fijo', 'variable', 'inversion']
+        && isInt(d.amount) && d.amount > 0 && d.amount <= 100000000
+        && isDate(d.businessDate)
+        && d.description is string && d.description.size() <= 200
+        && d.method in ['efectivo', 'transferencia']
+        && d.fromCash is bool
+        && (d.fromCash
+          ? (d.method == 'efectivo' && d.cashSessionId != null
+            && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+            && existsAfter(docPath('cashMovements', 'ex-' + id)))
+          : d.cashSessionId == null)
+        && (d.fixedExpenseId == null || isText(d.fixedExpenseId, 1, 60))
+        && (d.period == null || d.period.matches('^[0-9]{4}-[0-9]{2}$'))
+        && d.status == 'activo' && d.voidReason == null && d.voidedAt == null
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time
+        && d.updatedAt == request.time;
+    }
+
+    // Anular: solo cambian estado, motivo y fechas.
+    function voidOk(a, b) {
+      return a.status == 'activo' && b.status == 'anulado'
+        && b.diff(a).affectedKeys().hasOnly(['status', 'voidReason', 'voidedAt', 'updatedAt'])
+        && isText(b.voidReason, 3, 200)
+        && b.voidedAt == request.time
+        && b.updatedAt == request.time;
+    }
+
+    // ---------------------------------------------------------------- Capital (R-FIN-02)
+    match /capitalEntries/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && validCapital(id, request.resource.data);
+      allow update: if isAdmin() && voidOk(resource.data, request.resource.data)
+        && resource.data.fromCash == false;
+      allow delete: if false;
+    }
+
+    function validCapital(id, d) {
+      return d.keys().hasOnly(['type', 'amount', 'businessDate', 'description', 'fromCash',
+          'cashSessionId', 'status', 'voidReason', 'voidedAt', 'uid', 'createdAt', 'updatedAt'])
+        && d.type in ['inversion_inicial', 'aporte', 'retiro']
+        && isInt(d.amount) && d.amount > 0 && d.amount <= 100000000
+        && isDate(d.businessDate)
+        && d.description is string && d.description.size() <= 200
+        && d.fromCash is bool
+        && (d.fromCash
+          ? (d.type != 'inversion_inicial' && d.cashSessionId != null
+            && d.cashSessionId == get(docPath('counters', 'cashSessions')).data.openSessionId
+            && existsAfter(docPath('cashMovements', 'cap-' + id)))
+          : d.cashSessionId == null)
+        && d.status == 'activo' && d.voidReason == null && d.voidedAt == null
+        && d.uid == request.auth.uid
+        && d.createdAt == request.time
+        && d.updatedAt == request.time;
+    }
+
     // ---------------------------------------------------------------- Agregados diarios
     // D-204: se suman con increment() en las transacciones de cobro. Ventas y costo nunca negativos.
     match /dailyStats/{date} {
@@ -790,6 +910,8 @@ service cloud.firestore {
     function validDailyStats(date, d) {
       return d.keys().hasOnly(['businessDate', 'salesGross', 'cogs', 'ordersCount', 'collected',
           'orderLosses', 'invLosses', 'invGains', 'purchases', 'supplierPaid', 'supplierPaidCash',
+          'expensesFixed', 'expensesVariable', 'investment', 'initialInvestment', 'capitalIn',
+          'ownerWithdrawals', 'cashExtraIn',
           'byMethod', 'byChannel', 'byLossType', 'byHour', 'byProduct', 'byCategory', 'updatedAt'])
         && d.businessDate == date
         && isNonNegInt(d.get('salesGross', 0))
@@ -802,6 +924,13 @@ service cloud.firestore {
         && isNonNegInt(d.get('purchases', 0))
         && isNonNegInt(d.get('supplierPaid', 0))
         && isNonNegInt(d.get('supplierPaidCash', 0))
+        && isNonNegInt(d.get('expensesFixed', 0))
+        && isNonNegInt(d.get('expensesVariable', 0))
+        && isNonNegInt(d.get('investment', 0))
+        && isNonNegInt(d.get('initialInvestment', 0))
+        && isNonNegInt(d.get('capitalIn', 0))
+        && isNonNegInt(d.get('ownerWithdrawals', 0))
+        && isNonNegInt(d.get('cashExtraIn', 0))
         && d.get('byLossType', {}) is map
         && d.get('byHour', {}) is map
         && d.get('byMethod', {}) is map

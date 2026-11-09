@@ -22,6 +22,7 @@ export type AuditEntity =
   | 'stats'
   | 'supplier'
   | 'purchase'
+  | 'finance'
 
 export interface AuditEntryInput {
   action: string

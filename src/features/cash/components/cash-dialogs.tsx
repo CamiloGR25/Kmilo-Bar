@@ -35,6 +35,12 @@ import {
 } from '../domain/payments'
 import { closeCashSession, loadClosingData, registerCashMovement } from '../services/cash-service'
 import { correctPaymentMethod } from '../services/payments-service'
+import { CapitalForm } from '@/features/finance/components/capital-dialogs'
+import { ExpenseForm } from '@/features/finance/components/expense-dialogs'
+import { useExpenseCategories } from '@/features/finance/services/finance-service'
+import { SupplierPaymentDialog } from '@/features/purchases/components/purchase-dialogs'
+import { orderBalance, type PurchaseOrder } from '@/features/purchases/domain/purchases'
+import { usePurchaseOrders } from '@/features/purchases/services/purchases-service'
 
 const errorText = (e: unknown) =>
   e instanceof PaymentError || e instanceof CashError
@@ -45,11 +51,43 @@ const errorText = (e: unknown) =>
 // Entrada o salida de efectivo (R-PAG-05)
 // ---------------------------------------------------------------------------
 
-const MOVEMENT_OPTIONS: { type: CashMovementType; detail: string }[] = [
-  { type: 'entrada_extra', detail: 'Entra efectivo que no es venta (ej. más base para cambio).' },
-  { type: 'retiro_dueno', detail: 'Sale efectivo de la caja para el dueño.' },
-  { type: 'correccion', detail: 'Ajuste con motivo: suma o resta efectivo.' },
-]
+/** Para qué entra o sale la plata (D-226 #4). Cada propósito queda en su lugar en Finanzas. */
+type Purpose =
+  | 'gasto'
+  | 'proveedor'
+  | 'inversion'
+  | 'retiro'
+  | 'correccion_sale'
+  | 'entrada_extra'
+  | 'aporte'
+  | 'correccion_entra'
+
+const PURPOSES: Record<'sale' | 'entra', { id: Purpose; label: string; detail: string }[]> = {
+  sale: [
+    {
+      id: 'gasto',
+      label: 'Pagar un gasto',
+      detail: 'Arriendo, servicios, transporte… (escoges la categoría).',
+    },
+    { id: 'proveedor', label: 'Pagar a un proveedor', detail: 'Abona o paga un pedido que debes.' },
+    {
+      id: 'inversion',
+      label: 'Inversión o equipamiento',
+      detail: 'Nevera, sonido, mejoras del local.',
+    },
+    { id: 'retiro', label: 'Retiro de ganancias', detail: 'Plata que sacas para ti. No es gasto.' },
+    { id: 'correccion_sale', label: 'Corrección', detail: 'Ajuste con motivo: resta efectivo.' },
+  ],
+  entra: [
+    {
+      id: 'entrada_extra',
+      label: 'Entrada extraordinaria',
+      detail: 'Efectivo que no es venta (ej. más base para cambio).',
+    },
+    { id: 'aporte', label: 'Aporte del dueño', detail: 'Plata tuya que pones al negocio.' },
+    { id: 'correccion_entra', label: 'Corrección', detail: 'Ajuste con motivo: suma efectivo.' },
+  ],
+}
 
 export function CashMovementDialog({
   session,
@@ -63,18 +101,64 @@ export function CashMovementDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const [payOrder, setPayOrder] = useState<PurchaseOrder | null>(null)
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        {open && (
-          <MovementForm
-            session={session}
-            cashAvailable={cashAvailable}
-            onDone={() => onOpenChange(false)}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+          {open && (
+            <MovementForm
+              session={session}
+              cashAvailable={cashAvailable}
+              onDone={() => onOpenChange(false)}
+              onPayOrder={(o) => {
+                onOpenChange(false)
+                setPayOrder(o)
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+      {payOrder && (
+        <SupplierPaymentDialog
+          order={payOrder}
+          open
+          fromCashDefault
+          onOpenChange={(o) => !o && setPayOrder(null)}
+        />
+      )}
+    </>
+  )
+}
+
+/** Pedidos con saldo, para pagar desde la caja. */
+function OrderPicker({ onPick }: { onPick: (o: PurchaseOrder) => void }) {
+  const orders = usePurchaseOrders()
+  const owed = (orders.data ?? []).filter((o) => orderBalance(o) > 0)
+  if (orders.loading) return <p className="text-label text-muted-foreground">Cargando pedidos…</p>
+  if (owed.length === 0) {
+    return <p className="text-label text-muted-foreground">No le debes nada a ningún proveedor.</p>
+  }
+  return (
+    <ul className="divide-y divide-border rounded-xl border">
+      {owed.map((o) => (
+        <li key={o.id}>
+          <button
+            type="button"
+            onClick={() => onPick(o)}
+            className="flex w-full cursor-pointer items-center justify-between gap-4 px-4 py-3 text-left hover:bg-raised"
+          >
+            <span>
+              <span className="block font-medium">{o.supplierName}</span>
+              <span className="block text-meta text-subtle-foreground">
+                {o.kind === 'directa' ? 'Compra' : 'Pedido'} #{o.number}
+              </span>
+            </span>
+            <span className="tabular font-semibold text-warning">{formatCop(orderBalance(o))}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -82,15 +166,116 @@ function MovementForm({
   session,
   cashAvailable,
   onDone,
+  onPayOrder,
 }: {
   session: CashSession
   cashAvailable: number
   onDone: () => void
+  onPayOrder: (o: PurchaseOrder) => void
+}) {
+  const categories = useExpenseCategories()
+  const [direction, setDirection] = useState<'entra' | 'sale'>('sale')
+  const [purpose, setPurpose] = useState<Purpose>('gasto')
+
+  function switchDirection(d: 'entra' | 'sale') {
+    setDirection(d)
+    setPurpose(PURPOSES[d][0]!.id)
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <DialogHeader>
+        <DialogTitle className="text-title">Entrada o salida de efectivo</DialogTitle>
+        <DialogDescription className="text-label">
+          Caja #{session.number}: hay {formatCop(cashAvailable)}. Cuenta en el arqueo y en Finanzas.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div role="radiogroup" aria-label="Dirección" className="grid grid-cols-2 gap-2">
+        {(['sale', 'entra'] as const).map((d) => (
+          <Button
+            key={d}
+            type="button"
+            role="radio"
+            aria-checked={direction === d}
+            variant={direction === d ? 'default' : 'outline'}
+            onClick={() => switchDirection(d)}
+          >
+            {d === 'sale' ? 'Sale plata' : 'Entra plata'}
+          </Button>
+        ))}
+      </div>
+
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-label font-medium">¿Para qué?</legend>
+        {PURPOSES[direction].map((o) => (
+          <label
+            key={o.id}
+            className={cn(
+              'flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition-colors',
+              purpose === o.id ? 'border-primary bg-primary/8' : 'hover:bg-raised',
+            )}
+          >
+            <input
+              type="radio"
+              name="movement-purpose"
+              checked={purpose === o.id}
+              onChange={() => setPurpose(o.id)}
+              className="mt-1 size-4 accent-[var(--primary)]"
+            />
+            <span>
+              <span className="block font-medium">{o.label}</span>
+              <span className="block text-label text-muted-foreground">{o.detail}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      {purpose === 'gasto' || purpose === 'inversion' ? (
+        <ExpenseForm
+          key={purpose}
+          embedded
+          categories={categories.data ?? []}
+          preset={{
+            fromCash: true,
+            kinds: purpose === 'gasto' ? ['fijo', 'variable'] : ['inversion'],
+          }}
+          onDone={onDone}
+        />
+      ) : purpose === 'proveedor' ? (
+        <OrderPicker onPick={onPayOrder} />
+      ) : purpose === 'retiro' || purpose === 'aporte' ? (
+        <CapitalForm key={purpose} embedded cashOnly type={purpose} onDone={onDone} />
+      ) : (
+        <PlainMovementForm
+          key={purpose}
+          session={session}
+          cashAvailable={cashAvailable}
+          type={purpose === 'entrada_extra' ? 'entrada_extra' : 'correccion'}
+          direction={direction}
+          onDone={onDone}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Entrada extraordinaria o corrección: monto y motivo (R-PAG-05). */
+function PlainMovementForm({
+  session,
+  cashAvailable,
+  type,
+  direction,
+  onDone,
+}: {
+  session: CashSession
+  cashAvailable: number
+  type: CashMovementType
+  direction: 'entra' | 'sale'
+  onDone: () => void
 }) {
   const { user } = useAuth()
   const [movementId] = useState(() => crypto.randomUUID())
-  const [type, setType] = useState<CashMovementType>('entrada_extra')
-  const [direction, setDirection] = useState<'entra' | 'sale'>('sale')
   const [amount, setAmount] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const [pending, setPending] = useState(false)
@@ -120,56 +305,7 @@ function MovementForm({
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-5">
-      <DialogHeader>
-        <DialogTitle className="text-title">Entrada o salida de efectivo</DialogTitle>
-        <DialogDescription className="text-label">
-          Queda registrada en la caja #{session.number} y cuenta en el arqueo.
-        </DialogDescription>
-      </DialogHeader>
-
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-label font-medium">Tipo</legend>
-        {MOVEMENT_OPTIONS.map((o) => (
-          <label
-            key={o.type}
-            className={cn(
-              'flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition-colors',
-              type === o.type ? 'border-primary bg-primary/8' : 'hover:bg-raised',
-            )}
-          >
-            <input
-              type="radio"
-              name="movement-type"
-              checked={type === o.type}
-              onChange={() => setType(o.type)}
-              className="mt-1 size-4 accent-[var(--primary)]"
-            />
-            <span>
-              <span className="block font-medium">{CASH_MOVEMENT_LABELS[o.type]}</span>
-              <span className="block text-label text-muted-foreground">{o.detail}</span>
-            </span>
-          </label>
-        ))}
-      </fieldset>
-
-      {type === 'correccion' && (
-        <div role="radiogroup" aria-label="Dirección" className="grid grid-cols-2 gap-2">
-          {(['entra', 'sale'] as const).map((d) => (
-            <Button
-              key={d}
-              type="button"
-              role="radio"
-              aria-checked={direction === d}
-              variant={direction === d ? 'default' : 'outline'}
-              onClick={() => setDirection(d)}
-            >
-              {d === 'entra' ? 'Suma efectivo' : 'Resta efectivo'}
-            </Button>
-          ))}
-        </div>
-      )}
-
+    <form onSubmit={submit} className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <Label htmlFor="mov-amount">Monto</Label>
         <MoneyInput id="mov-amount" value={amount} onChange={setAmount} />

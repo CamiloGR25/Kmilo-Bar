@@ -85,6 +85,9 @@ function useInitialData() {
       // Fase 7: consecutivo de pedidos de compra.
       .then(() => import('@/features/purchases/services/purchases-service'))
       .then(({ ensurePurchasesSetup }) => ensurePurchasesSetup())
+      // Fase 8: categorías de gasto iniciales.
+      .then(() => import('@/features/finance/services/finance-service'))
+      .then(({ ensureFinanceSetup }) => ensureFinanceSetup(uid))
       .catch((e: Error) => toast.error(`No se pudieron preparar los datos: ${e.message}`))
   }, [uid])
 }

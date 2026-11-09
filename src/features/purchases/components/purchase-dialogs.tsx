@@ -247,12 +247,15 @@ export function SupplierPaymentDialog({
   open,
   onOpenChange,
   afterReception,
+  fromCashDefault,
 }: {
   order: PurchaseOrder
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Se abre justo después de recibir: "pagado ahora" o "queda debiendo". */
   afterReception?: boolean
+  /** Desde la salida de caja (D-226 #4): empieza en efectivo "De la caja". */
+  fromCashDefault?: boolean
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -261,6 +264,7 @@ export function SupplierPaymentDialog({
           <PaymentForm
             order={order}
             afterReception={afterReception}
+            fromCashDefault={fromCashDefault}
             onDone={() => onOpenChange(false)}
           />
         )}
@@ -272,10 +276,12 @@ export function SupplierPaymentDialog({
 function PaymentForm({
   order,
   afterReception,
+  fromCashDefault,
   onDone,
 }: {
   order: PurchaseOrder
   afterReception?: boolean
+  fromCashDefault?: boolean
   onDone: () => void
 }) {
   const { user } = useAuth()
@@ -293,7 +299,7 @@ function PaymentForm({
   const [amount, setAmount] = useState<number | null>(balance)
   const [method, setMethod] = useState<SupplierPayMethod>('efectivo')
   const [channel, setChannel] = useState<TransferChannel>('nequi')
-  const [source, setSource] = useState<'caja' | 'fuera'>('fuera')
+  const [source, setSource] = useState<'caja' | 'fuera'>(fromCashDefault ? 'caja' : 'fuera')
   const [notes, setNotes] = useState('')
   const [pending, setPending] = useState(false)
 

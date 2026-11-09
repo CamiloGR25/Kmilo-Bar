@@ -19,6 +19,7 @@ import { formatCop } from '@/domain/money'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
 import { addAudit } from '@/features/audit/services/audit'
+import { addDailyStats } from '@/features/reports/services/daily-stats'
 import { isOpen, type OrderStatus } from '@/features/orders/domain/orders'
 import {
   CashError,
@@ -206,6 +207,9 @@ export async function registerCashMovement(
       uid,
       createdAt: serverTimestamp(),
     })
+    // F-13: la entrada extraordinaria suma al flujo de caja del día (D-226).
+    if (type === 'entrada_extra')
+      addDailyStats(db, tx, session.businessDate, { cashExtraIn: amount })
     addAudit(db, tx, uid, {
       action: 'movimiento_caja',
       entity: 'cash',

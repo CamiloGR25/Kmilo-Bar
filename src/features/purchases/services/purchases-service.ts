@@ -576,6 +576,23 @@ export function useSupplierPaymentsOfOrder(orderId: string | undefined) {
   )
 }
 
+/** Pagos a proveedores de un rango de jornadas (Gastos los muestra como "Compra de mercancía"). */
+export function useSupplierPaymentsInRange(from: string, to: string) {
+  return useSubscription<SupplierPayment[]>(
+    (onData, onError) =>
+      onSnapshot(
+        query(
+          collection(db, 'supplierPayments'),
+          where('businessDate', '>=', from),
+          where('businessDate', '<=', to),
+        ),
+        (snap) => onData(snap.docs.map((d) => supplierPaymentFromDoc(d.id, d.data()))),
+        onError,
+      ),
+    `supplierPayments/${from}/${to}`,
+  )
+}
+
 /** Paga (todo o una parte) lo recibido de un pedido. `paymentId` se genera antes (D-203). */
 export async function registerSupplierPayment(
   uid: string,

@@ -41,9 +41,9 @@ describe('acceso por defecto', () => {
   })
 
   it('ni siquiera el administrador accede a colecciones aún no habilitadas', async () => {
-    await assertFails(getDoc(doc(admin(), 'expenses/g1')))
-    await assertFails(setDoc(doc(admin(), 'expenses/g1'), { total: 1000 }))
-    await assertFails(getDoc(doc(admin(), 'capitalEntries/c1')))
+    await assertFails(getDoc(doc(admin(), 'reports/r1')))
+    await assertFails(setDoc(doc(admin(), 'reports/r1'), { total: 1000 }))
+    await assertFails(getDoc(doc(admin(), 'backups/b1')))
   })
 })
 

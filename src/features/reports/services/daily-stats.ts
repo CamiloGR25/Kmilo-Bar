@@ -36,6 +36,13 @@ const NUM_KEYS = [
   'purchases',
   'supplierPaid',
   'supplierPaidCash',
+  'expensesFixed',
+  'expensesVariable',
+  'investment',
+  'initialInvestment',
+  'capitalIn',
+  'ownerWithdrawals',
+  'cashExtraIn',
 ] as const
 
 const incMap = (m: Partial<Record<string, number>> | undefined) =>
@@ -117,6 +124,13 @@ export interface DailyStats {
   purchases: number
   supplierPaid: number
   supplierPaidCash: number
+  expensesFixed: number
+  expensesVariable: number
+  investment: number
+  initialInvestment: number
+  capitalIn: number
+  ownerWithdrawals: number
+  cashExtraIn: number
   byMethod: Record<string, number>
   byChannel: Record<string, number>
   byLossType: Partial<Record<InventoryLossKey, number>>
@@ -140,6 +154,13 @@ export function dailyStatsFromDoc(businessDate: string, x: Record<string, unknow
     purchases: Number(x.purchases ?? 0),
     supplierPaid: Number(x.supplierPaid ?? 0),
     supplierPaidCash: Number(x.supplierPaidCash ?? 0),
+    expensesFixed: Number(x.expensesFixed ?? 0),
+    expensesVariable: Number(x.expensesVariable ?? 0),
+    investment: Number(x.investment ?? 0),
+    initialInvestment: Number(x.initialInvestment ?? 0),
+    capitalIn: Number(x.capitalIn ?? 0),
+    ownerWithdrawals: Number(x.ownerWithdrawals ?? 0),
+    cashExtraIn: Number(x.cashExtraIn ?? 0),
     byMethod: numMap(x.byMethod),
     byChannel: numMap(x.byChannel),
     byLossType: numMap(x.byLossType),

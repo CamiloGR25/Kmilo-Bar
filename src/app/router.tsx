@@ -17,6 +17,8 @@ const BUILT = new Set([
   '/ventas',
   '/compras',
   '/proveedores',
+  '/gastos',
+  '/finanzas',
   '/productos',
   '/inventario',
   '/configuracion',
@@ -126,6 +128,27 @@ export const routes: RouteObject[] = [
                 lazy: async () => ({
                   Component: (await import('@/features/purchases/components/purchase-form-page'))
                     .PurchaseFormPage,
+                }),
+              },
+              {
+                path: 'gastos',
+                lazy: async () => ({
+                  Component: (await import('@/features/finance/components/expenses-page'))
+                    .ExpensesPage,
+                }),
+              },
+              {
+                path: 'finanzas',
+                lazy: async () => ({
+                  Component: (await import('@/features/finance/components/finance-page'))
+                    .FinancePage,
+                }),
+              },
+              {
+                path: 'finanzas/capital',
+                lazy: async () => ({
+                  Component: (await import('@/features/finance/components/capital-page'))
+                    .CapitalPage,
                 }),
               },
               {

@@ -34,6 +34,7 @@ import { SalesBarChart } from '@/features/reports/components/sales-bar-chart'
 import { daySummaryText } from '@/features/reports/domain/day-summary'
 import { useDailyStatsRange } from '@/features/reports/services/daily-stats'
 import { useTables } from '@/features/tables/services/tables-service'
+import { FinanceCard } from '@/features/finance/components/finance-card'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -238,6 +239,8 @@ export function DashboardPage() {
           </div>
         </section>
       </div>
+
+      <FinanceCard today={today} />
 
       <nav aria-label="Accesos rápidos" className="flex flex-col gap-4">
         <h2 className="text-title font-semibold">Accesos rápidos</h2>

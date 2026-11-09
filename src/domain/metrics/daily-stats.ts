@@ -65,6 +65,16 @@ export interface DailyStatsDelta {
   /** Fase 7: pagos a proveedores (para el flujo de caja, F-13); `supplierPaidCash` salió de la caja. */
   supplierPaid?: Cop
   supplierPaidCash?: Cop
+  /** Fase 8 (D-226): gastos fijos y variables (F-11), inversión en equipamiento (R-FIN-05). */
+  expensesFixed?: Cop
+  expensesVariable?: Cop
+  investment?: Cop
+  /** Fase 8: capital (R-FIN-02). La inversión inicial es plata del dueño ya gastada en ítems. */
+  initialInvestment?: Cop
+  capitalIn?: Cop
+  ownerWithdrawals?: Cop
+  /** Entradas extraordinarias de efectivo a la caja (F-13). */
+  cashExtraIn?: Cop
   /** Ventas por hora de Bogotá ("0"…"23") según la hora en que se confirmó cada ronda (D-221). */
   byHour?: Record<string, Cop>
 }
@@ -208,6 +218,13 @@ export function mergeDeltas(...deltas: DailyStatsDelta[]): DailyStatsDelta {
     'purchases',
     'supplierPaid',
     'supplierPaidCash',
+    'expensesFixed',
+    'expensesVariable',
+    'investment',
+    'initialInvestment',
+    'capitalIn',
+    'ownerWithdrawals',
+    'cashExtraIn',
   ] as const
   for (const d of deltas) {
     for (const k of nums) if (d[k] !== undefined) out[k] = (out[k] ?? 0) + d[k]!
@@ -260,6 +277,8 @@ export interface RebuildInput {
   /** Fase 7: recepciones y pagos a proveedores de la jornada. */
   receptions?: readonly { total: Cop }[]
   supplierPayments?: readonly { amount: Cop; fromCash: boolean }[]
+  /** Fase 8: gastos activos, capital activo y entradas extraordinarias de la jornada. */
+  extra?: readonly DailyStatsDelta[]
 }
 
 /**
@@ -272,6 +291,7 @@ export function buildDayStats({
   movements,
   receptions = [],
   supplierPayments = [],
+  extra = [],
 }: RebuildInput): DailyStatsDelta {
   const deltas: DailyStatsDelta[] = []
   for (const o of orders) {
@@ -283,6 +303,7 @@ export function buildDayStats({
   for (const m of movements) deltas.push(inventoryMovementStats(m.type, m.qty, m.unitCost))
   for (const r of receptions) deltas.push(purchaseStats(r.total))
   for (const p of supplierPayments) deltas.push(supplierPaymentStats(p.amount, p.fromCash))
+  deltas.push(...extra)
   return mergeDeltas(...deltas)
 }
 
