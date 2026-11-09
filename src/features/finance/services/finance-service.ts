@@ -333,8 +333,9 @@ export async function registerExpense(uid: string, expenseId: string, input: Exp
 }
 
 /**
- * Anula un gasto (R-FIN-04): no se borra. Si salió de la caja y esa caja sigue abierta, el
- * efectivo vuelve con una corrección; si ya se cerró, la caja no se toca.
+ * Anula un gasto (R-FIN-04): no se borra. Un gasto pagado de la caja solo se anula mientras esa
+ * caja sigue abierta: el efectivo vuelve con una corrección. Si la caja ya se cerró, no se anula:
+ * se corrige con una corrección o entrada extraordinaria en la caja actual (D-228).
  */
 export async function voidExpense(uid: string, expense: Expense, reason: string) {
   if (reason.trim().length < 3) throw new FinanceError('Escribe el motivo.')
@@ -347,6 +348,11 @@ export async function voidExpense(uid: string, expense: Expense, reason: string)
     const refund = Boolean(
       expense.fromCash && sessionId && counters.data()?.openSessionId === sessionId,
     )
+    if (expense.fromCash && !refund) {
+      throw new FinanceError(
+        'Este gasto salió de una caja ya cerrada: no se anula. Regístralo como corrección o entrada extraordinaria en la caja actual.',
+      )
+    }
     const session = refund ? await tx.get(doc(db, 'cashSessions', sessionId!)) : null
     tx.update(ref, {
       status: 'anulado',

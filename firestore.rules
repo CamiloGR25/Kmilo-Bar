@@ -216,7 +216,7 @@ service cloud.firestore {
 
     // ---------------------------------------------------------------- Contadores
     // Nacen en 0. `orders` solo sube de a 1; `cashSessions` sube al abrir una caja y guarda
-    // cuál está abierta (R-PAG-07: una sola). El cierre llega en la Fase 5.
+    // cuál está abierta (R-PAG-07: una sola). El cierre lo hace la Fase 5 (ver abajo).
     match /counters/{id} {
       allow read: if isAdmin();
       allow create: if isAdmin()
@@ -597,7 +597,7 @@ service cloud.firestore {
     }
 
     // ---------------------------------------------------------------- Movimientos de caja
-    // Inmutables, con motivo, solo en la caja abierta. Gastos y pagos a proveedores: Fases 7-8.
+    // Inmutables, con motivo, solo en la caja abierta. Pagos a proveedores (Fase 7) y gastos (Fase 8) también aquí.
     match /cashMovements/{id} {
       allow read: if isAdmin();
       allow create: if isAdmin() && validCashMovement(request.resource.data);

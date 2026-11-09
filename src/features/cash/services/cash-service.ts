@@ -5,6 +5,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -13,6 +14,7 @@ import {
   runTransaction,
   serverTimestamp,
   where,
+  type QuerySnapshot,
 } from 'firebase/firestore'
 import { businessDateOf } from '@/domain/dates'
 import { formatCop } from '@/domain/money'
@@ -220,20 +222,22 @@ export async function registerCashMovement(
   })
 }
 
-/** Datos para cerrar: lee cuentas, pagos y movimientos de la caja (una vez, al abrir el cierre). */
-export async function loadClosingData(session: CashSession) {
-  const [orders, payments, movements] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), where('cashSessionId', '==', session.id))),
-    getDocs(query(collection(db, 'payments'), where('cashSessionId', '==', session.id))),
-    getDocs(query(collection(db, 'cashMovements'), where('sessionId', '==', session.id))),
-  ])
-  const statuses = orders.docs.map((d) => ({
+/** Cuentas, pagos y movimientos de una caja, tal como están en el momento de leerlos. */
+interface SessionRecords {
+  orders: QuerySnapshot
+  payments: QuerySnapshot
+  movements: QuerySnapshot
+}
+
+/** Arma el arqueo (esperado, cuentas abiertas y resumen) a partir de los registros de la caja. */
+function buildClosingData(session: CashSession, records: SessionRecords) {
+  const statuses = records.orders.docs.map((d) => ({
     status: d.data().status as OrderStatus,
     total: Number(d.data().total ?? 0),
   }))
   const totals = sessionTotals(
-    payments.docs.map((d) => paymentFromDoc(d.id, d.data())),
-    movements.docs.map((d) => movementFromDoc(d.id, d.data())),
+    records.payments.docs.map((d) => paymentFromDoc(d.id, d.data())),
+    records.movements.docs.map((d) => movementFromDoc(d.id, d.data())),
   )
   const paidOrders = statuses.filter((o) => o.status === 'pagada')
   const summary: CashSummary = {
@@ -249,6 +253,20 @@ export async function loadClosingData(session: CashSession) {
   }
 }
 
+/** Datos para mostrar el arqueo antes de cerrar (solo lectura). */
+export async function loadClosingData(session: CashSession) {
+  const records = await readSessionRecords(session.id)
+  return buildClosingData(session, records)
+}
+
+function readSessionRecords(sessionId: string): Promise<SessionRecords> {
+  return Promise.all([
+    getDocs(query(collection(db, 'orders'), where('cashSessionId', '==', sessionId))),
+    getDocs(query(collection(db, 'payments'), where('cashSessionId', '==', sessionId))),
+    getDocs(query(collection(db, 'cashMovements'), where('sessionId', '==', sessionId))),
+  ]).then(([orders, payments, movements]) => ({ orders, payments, movements }))
+}
+
 /**
  * Cierra la caja (R-PAG-06): conteo físico, diferencia con motivo si no cuadra y resumen.
  * Definitivo: después no se cobra ni se corrige en ella.
@@ -259,8 +277,11 @@ export async function closeCashSession(
   countedCash: number,
   reason: string,
 ): Promise<CashClosing> {
-  // Se recalcula justo antes de cerrar, por si hubo cobros desde que se abrió el formulario.
-  const data = await loadClosingData(session)
+  // 1) Se lee el arqueo. 2) Dentro de la transacción se comprueba que no hayan cambiado las
+  // cuentas (contador de cuentas y su estado, saldo y total) ni la caja. Si cambió algo, no se
+  // cierra y el usuario lo vuelve a intentar con el arqueo nuevo.
+  const records = await readSessionRecords(session.id)
+  const data = buildClosingData(session, records)
   const error = validateClosing(countedCash, data.expected, reason, data.openOrders)
   if (error) throw new CashError(error)
   const difference = countedCash - data.expected
@@ -271,14 +292,43 @@ export async function closeCashSession(
     differenceReason: difference === 0 ? null : reason.trim(),
     summary: data.summary,
   }
+  const fingerprint = new Map(
+    records.orders.docs.map((d) => [
+      d.id,
+      [d.data().status, Number(d.data().total ?? 0), Number(d.data().paidTotal ?? 0)].join('|'),
+    ]),
+  )
+  const ordersCounterRef = doc(db, 'counters', 'orders')
+  const ordersCounterBefore = await getDoc(ordersCounterRef)
+  const lastBefore = Number(ordersCounterBefore.data()?.last ?? 0)
+
   await runTransaction(db, async (tx) => {
     const ref = doc(db, 'cashSessions', session.id)
-    const [snap, counters] = await Promise.all([tx.get(ref), tx.get(countersRef())])
+    const [snap, counters, ordersCounter, orderSnaps] = await Promise.all([
+      tx.get(ref),
+      tx.get(countersRef()),
+      tx.get(ordersCounterRef),
+      Promise.all([...fingerprint.keys()].map((id) => tx.get(doc(db, 'orders', id)))),
+    ])
     if (!snap.exists() || snap.data().status !== 'abierta') {
       throw new CashError('Esta caja ya está cerrada.')
     }
     if (counters.data()?.openSessionId !== session.id) {
       throw new CashError('Esta caja no es la abierta.')
+    }
+    const changed =
+      Number(ordersCounter.data()?.last ?? 0) !== lastBefore ||
+      orderSnaps.some((o) => {
+        const x = o.data()
+        return (
+          fingerprint.get(o.id) !==
+          [x?.status, Number(x?.total ?? 0), Number(x?.paidTotal ?? 0)].join('|')
+        )
+      })
+    if (changed) {
+      throw new CashError(
+        'Hubo cobros o cuentas nuevas mientras cerrabas. Revisa el arqueo y vuelve a cerrar.',
+      )
     }
     tx.update(ref, {
       status: 'cerrada',

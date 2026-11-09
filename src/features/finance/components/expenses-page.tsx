@@ -312,7 +312,7 @@ export function ExpensesPage() {
         confirmLabel="Anular"
         description={
           voiding?.fromCash
-            ? 'El gasto queda anulado (no se borra). Si su caja sigue abierta, el efectivo vuelve a la caja.'
+            ? 'El gasto queda anulado (no se borra). El efectivo vuelve a la caja solo si la caja sigue abierta; si ya se cerró, no se puede anular.'
             : 'El gasto queda anulado (no se borra) y deja de contar en las finanzas.'
         }
         onConfirm={async (reason) => {
