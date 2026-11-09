@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { LogOut, Menu, WifiOff } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router'
 import { toast } from 'sonner'
+import { GlobalSearch } from '@/features/search/components/global-search'
 import { BrandLockup } from '@/components/shared/brand'
 import { useAuth } from '@/features/auth/use-auth'
 import { useOnline } from '@/lib/use-online'
@@ -34,6 +35,9 @@ export function AppShell() {
       <Sidebar />
       <main className="min-w-0 pb-24 lg:pb-0">
         <OfflineBanner />
+        <div className="mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8">
+          <GlobalSearch />
+        </div>
         <Outlet />
       </main>
       <BottomNav />

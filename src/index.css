@@ -176,3 +176,41 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Impresión (Fase 9, F9-03): el PDF es solo el reporte, en blanco y negro. La app se oculta y
+   el reporte se monta en `.print-root`, directamente bajo <body> (ver ReportsPage). */
+.print-root {
+  display: none;
+}
+
+@media print {
+  body > *:not(.print-root) {
+    display: none !important;
+  }
+  .print-root {
+    display: block;
+    width: 100%;
+    background: #fff;
+    color: #000;
+  }
+  .print-root * {
+    color: #000 !important;
+    background: transparent !important;
+    border-color: #999 !important;
+    box-shadow: none !important;
+  }
+  .print-root table {
+    border-collapse: collapse;
+  }
+  .print-root th,
+  .print-root td {
+    border-bottom: 1px solid #ccc;
+  }
+  .print-root .text-right {
+    text-align: right;
+  }
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+}

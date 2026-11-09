@@ -57,7 +57,7 @@ describe('rutas protegidas', () => {
     const { service } = createFakeAuth({ uid: ADMIN_UID, email: 'admin@bar.co' })
     renderApp('/reportes', service)
     expect(await screen.findByRole('heading', { name: 'Reportes' })).toBeInTheDocument()
-    expect(screen.getAllByText(/aún no está disponible/).length).toBeGreaterThan(0)
+    expect(screen.getByRole('group', { name: 'Periodo' })).toBeInTheDocument()
   })
 
   it('una cuenta que no es la del administrador se cierra y ve el aviso', async () => {
