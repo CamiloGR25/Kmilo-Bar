@@ -46,6 +46,7 @@ import {
 } from '../domain/orders'
 import {
   addLine,
+  cancelRound,
   closeOrder,
   closeWithoutConsumption,
   newId,
@@ -102,11 +103,10 @@ function OrderView({ order }: { order: Order }) {
   const [naming, setNaming] = useState(false)
   const [closing, setClosing] = useState(false)
   const [statusPending, setStatusPending] = useState(false)
-  // Ronda que se está cobrando (D-230); null si no hay cobro abierto.
-  const [payRound, setPayRound] = useState<string | null>(null)
+  // Cobro abierto (D-230): una ronda, o todo lo pendiente (roundId null). null = cerrado.
+  const [payTarget, setPayTarget] = useState<{ roundId: string | null } | null>(null)
   const [closingAccount, setClosingAccount] = useState(false)
   const rounds = billedRounds(order)
-  const nextRound = rounds.find((r) => r.pending > 0) ?? null
   const [sharing, setSharing] = useState(false)
   const payments = usePaymentsOfOrder(order.id)
 
@@ -164,7 +164,18 @@ function OrderView({ order }: { order: Order }) {
       )
     if (failed.length > 0) toast.error('Algunos productos no se pudieron agregar. Revisa la ronda.')
     // D-230: la ronda confirmada se ofrece para cobrar ahora (o se deja por cobrar).
-    if (done > 0 && failed.length === 0) setPayRound(roundId)
+    if (done > 0 && failed.length === 0) setPayTarget({ roundId })
+  }
+
+  /** Cancela una ronda por error: sus productos vuelven al stock (solo sin cobros). */
+  async function cancelRoundNow(roundId: string) {
+    try {
+      await cancelRound(uid, order.id, roundId, newId())
+      setPayTarget(null)
+      toast.success('Ronda cancelada: los productos volvieron al stock')
+    } catch (e) {
+      toast.error(errorText(e))
+    }
   }
 
   async function closeAccount() {
@@ -248,7 +259,12 @@ function OrderView({ order }: { order: Order }) {
               Consumo
             </h2>
             {rounds.length > 0 && (
-              <RoundsList rounds={rounds} open={open} onPay={(id) => setPayRound(id)} />
+              <RoundsList
+                rounds={rounds}
+                open={open}
+                onPay={(id) => setPayTarget({ roundId: id })}
+                onCancel={(id) => void cancelRoundNow(id)}
+              />
             )}
             {order.lines.length === 0 ? (
               <p className="px-4 py-6 text-label text-muted-foreground">
@@ -334,14 +350,12 @@ function OrderView({ order }: { order: Order }) {
                       toast.warning('Confirma o vacía la ronda antes de cobrar.')
                       return
                     }
-                    setPayRound(nextRound?.id ?? null)
+                    setPayTarget({ roundId: null })
                   }}
-                  disabled={!nextRound || confirming}
+                  disabled={confirming}
                 >
                   <ReceiptText aria-hidden />
-                  {nextRound
-                    ? `Cobrar ronda ${nextRound.number} · ${formatCop(nextRound.pending)}`
-                    : 'Sin rondas por cobrar'}
+                  Cobrar todo pendiente · {formatCop(order.balance)}
                 </Button>
               ) : (
                 <Button
@@ -446,9 +460,10 @@ function OrderView({ order }: { order: Order }) {
       {open && (
         <PaymentDialog
           order={order}
-          roundId={payRound ?? ''}
-          open={payRound !== null}
-          onOpenChange={(o) => !o && setPayRound(null)}
+          roundId={payTarget?.roundId ?? null}
+          open={payTarget !== null}
+          onOpenChange={(o) => !o && setPayTarget(null)}
+          onCancelRound={(id) => void cancelRoundNow(id)}
         />
       )}
       <ShareReceiptDialog
@@ -656,10 +671,12 @@ function RoundsList({
   rounds,
   open,
   onPay,
+  onCancel,
 }: {
   rounds: BilledRound[]
   open: boolean
   onPay: (roundId: string) => void
+  onCancel: (roundId: string) => void
 }) {
   return (
     <ul aria-label="Rondas" className="divide-y divide-border border-b">
@@ -688,6 +705,16 @@ function RoundsList({
             {open && r.pending > 0 && (
               <Button variant="outline" size="sm" onClick={() => onPay(r.id)}>
                 Cobrar
+              </Button>
+            )}
+            {open && r.paid === 0 && r.total > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive"
+                onClick={() => onCancel(r.id)}
+              >
+                Cancelar
               </Button>
             )}
           </div>

@@ -18,6 +18,7 @@ import { useAuth } from '@/features/auth/use-auth'
 import { billedRounds, orderTitle, roundPending, type Order } from '@/features/orders/domain/orders'
 import { cn } from '@/lib/utils'
 import {
+  allocatePlan,
   cashSuggestions,
   CHANNEL_LABELS,
   CHANNELS,
@@ -28,22 +29,26 @@ import {
   type PaymentPlan,
   type TransferChannel,
 } from '../domain/payments'
-import { registerPayment } from '../services/payments-service'
+import { registerAllocatedPayments, registerPayment } from '../services/payments-service'
 
 /**
- * Cobrar una ronda (R-PAG-01/02, D-230): efectivo con cambio, transferencia con canal, parcial o
- * mixto. El cobro queda ligado a la ronda; la cuenta sigue abierta.
+ * Cobro (R-PAG-01/02, D-230). Con `roundId`, cobra esa ronda. Con `roundId` nulo, cobra todo lo
+ * pendiente repartido en orden de ronda (cada parte queda ligada a su ronda). La cuenta sigue
+ * abierta: no se cierra al cobrar.
  */
 export function PaymentDialog({
   order,
   roundId,
   open,
   onOpenChange,
+  onCancelRound,
 }: {
   order: Order
-  roundId: string
+  roundId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Solo en el cobro de una ronda sin pagos: la cancela (los productos vuelven al stock). */
+  onCancelRound?: (roundId: string) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -51,10 +56,11 @@ export function PaymentDialog({
         {/* key: un formulario (y un ID de pago) nuevo por cada pago (D-203) */}
         {open && (
           <PaymentForm
-            key={`${order.id}-${roundId}-${order.paidTotal}`}
+            key={`${order.id}-${roundId ?? 'todas'}-${order.paidTotal}`}
             order={order}
             roundId={roundId}
             onDone={() => onOpenChange(false)}
+            onCancelRound={onCancelRound}
           />
         )}
       </DialogContent>
@@ -87,18 +93,25 @@ function PaymentForm({
   order,
   roundId,
   onDone,
+  onCancelRound,
 }: {
   order: Order
-  roundId: string
+  roundId: string | null
   onDone: () => void
+  onCancelRound?: (roundId: string) => void
 }) {
   const { user } = useAuth()
   const [paymentId] = useState(() => crypto.randomUUID())
-  const round = billedRounds(order).find((r) => r.id === roundId)
-  const balance = roundPending(order, roundId)
+  const rounds = billedRounds(order)
+  const round = roundId ? rounds.find((r) => r.id === roundId) : undefined
+  // Lo que se cobra: la ronda elegida o todo lo pendiente de la cuenta.
+  const balance = roundId ? roundPending(order, roundId) : order.balance
   const [method, setMethod] = useState<PaymentMethod>('efectivo')
   const [cash, setCash] = useState<number | null>(null)
-  const [amount, setAmount] = useState<number | null>(balance)
+  // El monto de transferencia sigue al saldo hasta que la persona lo escribe: así no queda en 0
+  // si el saldo llega después de abrir el cobro.
+  const [amountTyped, setAmountTyped] = useState<number | null | undefined>(undefined)
+  const amount = amountTyped === undefined ? balance : amountTyped
   const [channel, setChannel] = useState<TransferChannel | null>(null)
   const [reference, setReference] = useState('')
   const [pending, setPending] = useState(false)
@@ -106,6 +119,7 @@ function PaymentForm({
 
   const result = plan(balance, method, cash, amount, channel, reference)
   const p = result.plan
+  const cancellable = !!round && round.paid === 0 && round.total > 0 && !!onCancelRound
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -113,13 +127,27 @@ function PaymentForm({
     if (!p) return
     setPending(true)
     try {
-      await registerPayment(user?.uid ?? '', order.id, paymentId, p, roundId)
-      const left = balance - p.amount
-      toast.success(
-        left > 0
-          ? `Pago registrado. La ronda aún debe ${formatCop(left)}`
-          : `Ronda ${round?.number ?? ''} cobrada`,
-      )
+      if (roundId) {
+        await registerPayment(user?.uid ?? '', order.id, paymentId, p, roundId)
+        const left = balance - p.amount
+        toast.success(
+          left > 0
+            ? `Pago registrado. La ronda aún debe ${formatCop(left)}`
+            : `Ronda ${round?.number ?? ''} cobrada`,
+        )
+      } else {
+        // Cobro de todo: se reparte en orden de ronda; cada parte se registra en su ronda.
+        const parts = allocatePlan(
+          p,
+          rounds.filter((r) => r.pending > 0).map((r) => ({ id: r.id, pending: r.pending })),
+        )
+        await registerAllocatedPayments(user?.uid ?? '', order.id, paymentId, parts)
+        toast.success(
+          p.amount >= balance
+            ? 'Todas las rondas quedaron cobradas'
+            : `Cobro registrado. Falta ${formatCop(balance - p.amount)}`,
+        )
+      }
       onDone()
     } catch (err) {
       toast.error(
@@ -133,16 +161,22 @@ function PaymentForm({
     <form onSubmit={submit} className="flex flex-col gap-5">
       <DialogHeader>
         <DialogTitle className="text-title">
-          Cobrar ronda {round?.number ?? ''} · {orderTitle(order)}
+          {roundId
+            ? `Cobrar ronda ${round?.number ?? ''} · ${orderTitle(order)}`
+            : `Cobrar todo lo pendiente · ${orderTitle(order)}`}
         </DialogTitle>
         <DialogDescription className="text-label">
-          Cuenta #{order.number}. Puedes cobrar todo o una parte (pago mixto o dividido); la cuenta
-          sigue abierta.
+          Cuenta #{order.number}.{' '}
+          {roundId
+            ? 'Puedes cobrar todo o una parte (pago mixto o dividido); la cuenta sigue abierta.'
+            : 'Se reparte en las rondas pendientes en orden; cada ronda queda con su cobro.'}
         </DialogDescription>
       </DialogHeader>
 
       <div className="flex items-baseline justify-between rounded-lg bg-raised px-4 py-3">
-        <span className="text-label text-muted-foreground">Por cobrar de esta ronda</span>
+        <span className="text-label text-muted-foreground">
+          {roundId ? 'Por cobrar de esta ronda' : 'Por cobrar en la cuenta'}
+        </span>
         <span className="tabular text-display leading-none font-semibold">
           {formatCop(balance)}
         </span>
@@ -232,7 +266,7 @@ function PaymentForm({
           </fieldset>
           <div className="flex flex-col gap-2">
             <Label htmlFor="pay-amount">Monto</Label>
-            <MoneyInput id="pay-amount" value={amount} onChange={setAmount} />
+            <MoneyInput id="pay-amount" value={amount} onChange={(v) => setAmountTyped(v)} />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="pay-ref">
@@ -260,14 +294,26 @@ function PaymentForm({
         </p>
       )}
 
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={() => onDone()} disabled={pending}>
-          Volver
-        </Button>
-        <Button type="submit" disabled={pending || (touched && !p)}>
-          {pending && <Loader2 aria-hidden className="animate-spin" />}
-          {p ? `Registrar ${formatCop(p.amount)}` : 'Registrar pago'}
-        </Button>
+      <DialogFooter className="flex-wrap sm:justify-between">
+        {cancellable && round && (
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => onCancelRound?.(round.id)}
+            disabled={pending}
+          >
+            Cancelar ronda
+          </Button>
+        )}
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" onClick={() => onDone()} disabled={pending}>
+            Dejar pendiente
+          </Button>
+          <Button type="submit" disabled={pending || (touched && !p)}>
+            {pending && <Loader2 aria-hidden className="animate-spin" />}
+            {p ? `Registrar ${formatCop(p.amount)}` : 'Registrar pago'}
+          </Button>
+        </div>
       </DialogFooter>
     </form>
   )

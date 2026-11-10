@@ -7,6 +7,7 @@ import {
   collection,
   doc,
   FieldPath,
+  getDoc,
   onSnapshot,
   query,
   runTransaction,
@@ -28,6 +29,7 @@ import { productFromDoc } from '@/features/products/services/catalog-service'
 import { isFree, type Table } from '@/features/tables/domain/tables'
 import { tableFromDoc } from '@/features/tables/services/tables-service'
 import {
+  activeQty,
   buildLine,
   roundCancellationError,
   canCloseWithoutConsumption,
@@ -393,6 +395,32 @@ export async function cancelLine(uid: string, req: CancelRequest): Promise<boole
     })
     return true
   })
+}
+
+/**
+ * Cancela una ronda por error (D-230): devuelve todos sus productos al stock. Solo si la ronda
+ * no tiene cobros. Cada línea es una cancelación con su ID derivado de la operación.
+ */
+export async function cancelRound(uid: string, orderId: string, roundId: string, opId: string) {
+  const snap = await getDoc(orderRef(orderId))
+  if (!snap.exists()) throw new OrderError('La cuenta no existe.')
+  const order = orderFromDoc(snap.id, snap.data())
+  if (!isOpen(order.status)) throw new OrderError('La cuenta ya está cerrada.')
+  if ((order.rounds[roundId] ?? 0) > 0) {
+    throw new OrderError('Esta ronda ya tiene cobros: no se puede cancelar.')
+  }
+  const lines = order.lines.filter((l) => l.roundId === roundId && activeQty(l) > 0)
+  if (lines.length === 0) throw new OrderError('La ronda no tiene productos activos.')
+  for (const [i, l] of lines.entries()) {
+    await cancelLine(uid, {
+      orderId,
+      lineId: l.lineId,
+      opId: `${opId}-${i}`,
+      qty: activeQty(l),
+      mode: 'devolver',
+      reason: 'Ronda cancelada por error',
+    })
+  }
 }
 
 /**

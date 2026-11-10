@@ -27,6 +27,7 @@ import {
   type Payment,
   type PaymentMethod,
   type PaymentPlan,
+  type RoundPart,
   type TransferChannel,
 } from '../domain/payments'
 
@@ -75,6 +76,23 @@ export const usePaymentsOfOrder = (orderId: string | undefined) =>
 /** Pagos de una caja (para el arqueo). */
 export const usePaymentsOfSession = (sessionId: string | undefined) =>
   usePaymentsWhere('cashSessionId', sessionId)
+
+/**
+ * Registra las partes de un cobro repartido (una por ronda). Cada parte tiene su ID derivado del
+ * ID de la operación: un reintento no vuelve a cobrar lo que ya quedó.
+ */
+export async function registerAllocatedPayments(
+  uid: string,
+  orderId: string,
+  baseId: string,
+  parts: readonly RoundPart[],
+): Promise<PaymentResult | null> {
+  let last: PaymentResult | null = null
+  for (const [i, part] of parts.entries()) {
+    last = await registerPayment(uid, orderId, `${baseId}-${i}`, part.plan, part.roundId)
+  }
+  return last
+}
 
 export interface PaymentResult {
   created: boolean

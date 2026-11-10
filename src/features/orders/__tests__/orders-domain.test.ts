@@ -296,6 +296,11 @@ describe('rondas de la cuenta (D-230)', () => {
     expect(roundCancellationError({ lines: [l], rounds: {} }, l, 3)).toBeNull()
   })
 
+  it('la numeración de las rondas no deja huecos al cancelar una', () => {
+    const solo = billedRounds({ lines: r2, rounds: {} })
+    expect(solo.map((r) => [r.number, r.id])).toEqual([[1, 'r2']])
+  })
+
   it('una ronda cancelada por completo no aparece', () => {
     const cancelled = [line({ lineId: 'a', roundId: 'r1', qty: 2, cancelledQty: 2 })]
     expect(billedRounds({ lines: cancelled, rounds: {} })).toEqual([])

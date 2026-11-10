@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   cashDifference,
+  allocatePlan,
   cashSuggestions,
   expectedCash,
   planCashMovement,
@@ -151,5 +152,37 @@ describe('arqueo (R-PAG-05/06)', () => {
     expect(validateClosing(null, 143_500, '', 0)).toMatch('Escribe')
     expect(validateClosing(780_000_780, 143_500, 'x', 0)).toMatch('demasiado alto')
     expect(validateClosing(143_500, 143_500, '', 2)).toMatch('2 cuentas abiertas')
+  })
+})
+
+describe('cobro de todo lo pendiente, repartido por ronda (D-230)', () => {
+  const rounds = [
+    { id: 'r1', pending: 9_000 },
+    { id: 'r2', pending: 30_000 },
+  ]
+
+  it('efectivo: cada ronda recibe lo suyo y el cambio va con la última', () => {
+    const parts = allocatePlan(planCashPayment(39_000, 50_000), rounds)
+    expect(parts.map((x) => [x.roundId, x.plan.amount, x.plan.tendered, x.plan.change])).toEqual([
+      ['r1', 9_000, 9_000, 0],
+      ['r2', 30_000, 41_000, 11_000],
+    ])
+    expect(parts.reduce((n, x) => n + x.plan.change, 0)).toBe(11_000)
+  })
+
+  it('transferencia: se reparte el monto sin cambio', () => {
+    const parts = allocatePlan(planTransferPayment(39_000, 20_000, 'nequi', null), rounds)
+    expect(parts.map((x) => [x.roundId, x.plan.amount, x.plan.tendered, x.plan.change])).toEqual([
+      ['r1', 9_000, null, 0],
+      ['r2', 11_000, null, 0],
+    ])
+  })
+
+  it('no reparte más de lo pendiente de las rondas', () => {
+    expect(() =>
+      allocatePlan(planTransferPayment(39_000, 39_000, 'banco', null), [
+        { id: 'r1', pending: 9_000 },
+      ]),
+    ).toThrow(/cambió/)
   })
 })

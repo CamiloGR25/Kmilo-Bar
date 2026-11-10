@@ -172,22 +172,18 @@ export function billedRoundTotal(lines: readonly OrderLine[], roundId: string): 
 export function billedRounds(order: Pick<Order, 'lines' | 'rounds'>): BilledRound[] {
   const ids: string[] = []
   for (const l of order.lines) if (!ids.includes(l.roundId)) ids.push(l.roundId)
-  return ids
-    .map((id, i): BilledRound => {
-      const lines = order.lines.filter((l) => l.roundId === id)
-      const total = billedRoundTotal(lines, id)
-      const paid = Math.min(order.rounds[id] ?? 0, total)
-      return {
-        id,
-        number: i + 1,
-        lines,
-        total,
-        paid,
-        pending: total - paid,
-        at: earliest(lines),
-      }
-    })
-    .filter((r) => r.total > 0)
+  return (
+    ids
+      .map((id) => {
+        const lines = order.lines.filter((l) => l.roundId === id)
+        const total = billedRoundTotal(lines, id)
+        const paid = Math.min(order.rounds[id] ?? 0, total)
+        return { id, lines, total, paid, pending: total - paid, at: earliest(lines) }
+      })
+      .filter((r) => r.total > 0)
+      // Numeración sin huecos: una ronda cancelada no deja "Ronda 1" vacía.
+      .map((r, i): BilledRound => ({ ...r, number: i + 1 }))
+  )
 }
 
 function earliest(lines: readonly OrderLine[]): Date | null {

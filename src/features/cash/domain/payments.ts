@@ -299,3 +299,46 @@ export function validateClosing(
   }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Cobro de todo lo pendiente (D-230): reparto en orden de ronda
+// ---------------------------------------------------------------------------
+
+/** Parte de un cobro que se aplica a una ronda. */
+export interface RoundPart {
+  roundId: string
+  plan: PaymentPlan
+}
+
+/**
+ * Reparte un cobro entre rondas pendientes, en el orden dado. El efectivo recibido va con la
+ * última parte: las anteriores se reciben justas (sin cambio), y el cambio total no cambia.
+ */
+export function allocatePlan(
+  plan: PaymentPlan,
+  rounds: readonly { id: string; pending: Cop }[],
+): RoundPart[] {
+  const parts: RoundPart[] = []
+  let left = plan.amount
+  let tenderedLeft = plan.tendered ?? 0
+  for (const r of rounds) {
+    if (left <= 0) break
+    const amount = Math.min(left, r.pending)
+    if (amount <= 0) continue
+    left -= amount
+    const cash = plan.method === 'efectivo'
+    const tendered = cash ? (left === 0 ? tenderedLeft : amount) : null
+    if (cash) tenderedLeft -= tendered ?? 0
+    parts.push({
+      roundId: r.id,
+      plan: {
+        ...plan,
+        amount,
+        tendered,
+        change: cash ? (tendered ?? 0) - amount : 0,
+      },
+    })
+  }
+  if (left > 0) throw new PaymentError('El saldo cambió: vuelve a abrir el cobro.')
+  return parts
+}
