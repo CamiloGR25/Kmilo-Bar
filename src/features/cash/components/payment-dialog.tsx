@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatCop } from '@/domain/money'
 import { useAuth } from '@/features/auth/use-auth'
-import { orderTitle, type Order } from '@/features/orders/domain/orders'
+import { billedRounds, orderTitle, roundPending, type Order } from '@/features/orders/domain/orders'
 import { cn } from '@/lib/utils'
 import {
   cashSuggestions,
@@ -30,17 +30,20 @@ import {
 } from '../domain/payments'
 import { registerPayment } from '../services/payments-service'
 
-/** Cobrar una cuenta (R-PAG-01/02): efectivo con cambio, transferencia con canal, parcial o mixto. */
+/**
+ * Cobrar una ronda (R-PAG-01/02, D-230): efectivo con cambio, transferencia con canal, parcial o
+ * mixto. El cobro queda ligado a la ronda; la cuenta sigue abierta.
+ */
 export function PaymentDialog({
   order,
+  roundId,
   open,
   onOpenChange,
-  onPaid,
 }: {
   order: Order
+  roundId: string
   open: boolean
   onOpenChange: (open: boolean) => void
-  onPaid: () => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -48,12 +51,10 @@ export function PaymentDialog({
         {/* key: un formulario (y un ID de pago) nuevo por cada pago (D-203) */}
         {open && (
           <PaymentForm
-            key={`${order.id}-${order.paidTotal}`}
+            key={`${order.id}-${roundId}-${order.paidTotal}`}
             order={order}
-            onDone={(paid) => {
-              onOpenChange(false)
-              if (paid) onPaid()
-            }}
+            roundId={roundId}
+            onDone={() => onOpenChange(false)}
           />
         )}
       </DialogContent>
@@ -82,10 +83,19 @@ function plan(
   }
 }
 
-function PaymentForm({ order, onDone }: { order: Order; onDone: (paid: boolean) => void }) {
+function PaymentForm({
+  order,
+  roundId,
+  onDone,
+}: {
+  order: Order
+  roundId: string
+  onDone: () => void
+}) {
   const { user } = useAuth()
   const [paymentId] = useState(() => crypto.randomUUID())
-  const balance = order.balance
+  const round = billedRounds(order).find((r) => r.id === roundId)
+  const balance = roundPending(order, roundId)
   const [method, setMethod] = useState<PaymentMethod>('efectivo')
   const [cash, setCash] = useState<number | null>(null)
   const [amount, setAmount] = useState<number | null>(balance)
@@ -103,10 +113,14 @@ function PaymentForm({ order, onDone }: { order: Order; onDone: (paid: boolean) 
     if (!p) return
     setPending(true)
     try {
-      const res = await registerPayment(user?.uid ?? '', order.id, paymentId, p)
-      if (res.paid) toast.success(`${orderTitle(order)} pagada`)
-      else toast.success(`Pago registrado. Falta ${formatCop(res.balanceAfter)}`)
-      onDone(res.paid)
+      await registerPayment(user?.uid ?? '', order.id, paymentId, p, roundId)
+      const left = balance - p.amount
+      toast.success(
+        left > 0
+          ? `Pago registrado. La ronda aún debe ${formatCop(left)}`
+          : `Ronda ${round?.number ?? ''} cobrada`,
+      )
+      onDone()
     } catch (err) {
       toast.error(
         err instanceof PaymentError ? err.message : `No se pudo cobrar: ${(err as Error).message}`,
@@ -118,17 +132,17 @@ function PaymentForm({ order, onDone }: { order: Order; onDone: (paid: boolean) 
   return (
     <form onSubmit={submit} className="flex flex-col gap-5">
       <DialogHeader>
-        <DialogTitle className="text-title">Cobrar {orderTitle(order)}</DialogTitle>
+        <DialogTitle className="text-title">
+          Cobrar ronda {round?.number ?? ''} · {orderTitle(order)}
+        </DialogTitle>
         <DialogDescription className="text-label">
-          Cuenta #{order.number}.{' '}
-          {order.paidTotal > 0
-            ? `Total ${formatCop(order.total)}, ya pagado ${formatCop(order.paidTotal)}.`
-            : 'Puedes cobrar todo o una parte (pago mixto o dividido).'}
+          Cuenta #{order.number}. Puedes cobrar todo o una parte (pago mixto o dividido); la cuenta
+          sigue abierta.
         </DialogDescription>
       </DialogHeader>
 
       <div className="flex items-baseline justify-between rounded-lg bg-raised px-4 py-3">
-        <span className="text-label text-muted-foreground">Por cobrar</span>
+        <span className="text-label text-muted-foreground">Por cobrar de esta ronda</span>
         <span className="tabular text-display leading-none font-semibold">
           {formatCop(balance)}
         </span>
@@ -247,7 +261,7 @@ function PaymentForm({ order, onDone }: { order: Order; onDone: (paid: boolean) 
       )}
 
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={() => onDone(false)} disabled={pending}>
+        <Button type="button" variant="outline" onClick={() => onDone()} disabled={pending}>
           Volver
         </Button>
         <Button type="submit" disabled={pending || (touched && !p)}>

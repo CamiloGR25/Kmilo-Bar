@@ -16,7 +16,7 @@ import {
   type Transaction,
 } from 'firebase/firestore'
 import { businessDateOf } from '@/domain/dates'
-import { lossStats } from '@/domain/metrics/daily-stats'
+import { lossStats, paidOrderStats } from '@/domain/metrics/daily-stats'
 import { formatCop } from '@/domain/money'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
@@ -29,6 +29,7 @@ import { isFree, type Table } from '@/features/tables/domain/tables'
 import { tableFromDoc } from '@/features/tables/services/tables-service'
 import {
   buildLine,
+  roundCancellationError,
   canCloseWithoutConsumption,
   isOpen,
   normalizeLabel,
@@ -64,6 +65,7 @@ function lineFromMap(lineId: string, x: Record<string, unknown>): OrderLine {
     lostQty: Number(x.lostQty ?? 0),
     lastCancelId: (x.lastCancelId as string | null) ?? null,
     addedAt: toDate(x.addedAt),
+    roundId: String(x.roundId ?? ''),
   }
 }
 
@@ -94,6 +96,9 @@ export function orderFromDoc(id: string, x: Record<string, unknown>): Order {
     balance: Number(x.balance ?? 0),
     openedAt: toDate(x.openedAt),
     closedAt: toDate(x.closedAt),
+    rounds: Object.fromEntries(
+      Object.entries((x.rounds ?? {}) as Record<string, unknown>).map(([k, v]) => [k, Number(v)]),
+    ),
   }
 }
 
@@ -210,6 +215,7 @@ export async function openOrder(
       cashSessionId,
       businessDate: businessDateOf(new Date()),
       items: {},
+      rounds: {},
       lastLineId: null,
       subtotal: 0,
       total: 0,
@@ -241,6 +247,7 @@ export async function addLine(
   uid: string,
   orderId: string,
   item: RoundItem,
+  roundId: string,
 ): Promise<AddLineResult> {
   const movementId = `sale_${orderId}_${item.lineId}`
   return runTransaction(db, async (tx) => {
@@ -261,7 +268,7 @@ export async function addLine(
     }
     const order = await readOpenOrder(tx, orderId)
 
-    const line = buildLine(product, item.qty)
+    const line = { ...buildLine(product, item.qty), roundId }
     const result = applyMovement(
       { stock: product.stock, avgCost: product.avgCost },
       { type: 'venta', quantity: item.qty },
@@ -324,6 +331,10 @@ export async function cancelLine(uid: string, req: CancelRequest): Promise<boole
     if (line.lastCancelId === req.opId) return false // reintento
 
     const plan = planCancellation(line, req.qty, req.mode, req.reason)
+    // D-230: lo cobrado de una ronda no se cancela ni se devuelve.
+    const unitsOut = plan.cancelledQty + plan.lostQty - line.cancelledQty - line.lostQty
+    const roundError = roundCancellationError(order, line, unitsOut)
+    if (roundError) throw new OrderError(roundError)
     const reason = req.reason.trim()
     if (plan.returnQty > 0) {
       const productSnap = await tx.get(doc(db, 'products', line.productId))
@@ -463,6 +474,35 @@ export async function moveOrder(uid: string, orderId: string, toTableId: string)
       summary: `Cuenta #${order.number} movida: ${orderTitle(order)} → ${target.name}`,
       before: { tableId: order.tableId },
       after: { tableId: target.id },
+    })
+  })
+}
+
+/**
+ * Cierra una cuenta ya cobrada en su totalidad y libera la mesa (D-230). La cuenta no se cierra
+ * sola al cobrar una ronda: queda abierta para seguir pidiendo hasta que se cierre aquí.
+ * La venta se suma al resumen del día al cerrar (F-04, F-07).
+ */
+export async function closeOrder(uid: string, orderId: string) {
+  await runTransaction(db, async (tx) => {
+    const order = await readOpenOrder(tx, orderId)
+    if (order.subtotal === 0)
+      throw new OrderError('Esta cuenta no tiene consumo: ciérrala sin consumo.')
+    if (order.balance !== 0) throw new OrderError(`Falta cobrar ${formatCop(order.balance)}.`)
+    tx.update(orderRef(orderId), {
+      status: 'pagada',
+      closedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+    if (order.type === 'mesa' && order.tableId) {
+      tx.update(tableRef(order.tableId), { status: 'disponible', currentOrderId: null })
+    }
+    addDailyStats(db, tx, order.businessDate, paidOrderStats(order.lines, new Date()))
+    addAudit(db, tx, uid, {
+      action: 'cuenta_pagada',
+      entity: 'order',
+      entityId: orderId,
+      summary: `Cuenta #${order.number} (${orderTitle(order)}) cerrada: ${formatCop(order.total)}`,
     })
   })
 }

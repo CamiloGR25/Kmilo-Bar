@@ -74,6 +74,7 @@ const line = (over = {}) => ({
   lostQty: 0,
   lastCancelId: null,
   addedAt: T0,
+  roundId: 'r1',
   ...over,
 })
 
@@ -90,6 +91,7 @@ const order = (over: Record<string, unknown> = {}) => {
     businessDate: '2026-11-05',
     items: {},
     lastLineId: null,
+    rounds: {},
     subtotal,
     total: subtotal,
     paidTotal: 0,

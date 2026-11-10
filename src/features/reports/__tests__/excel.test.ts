@@ -30,5 +30,5 @@ describe('Excel (F9-02)', () => {
     // Un .xlsx es un ZIP: empieza con "PK".
     expect(String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0)).toBe('PK')
     expect(bytes.byteLength).toBeGreaterThan(2_000)
-  })
+  }, 30_000) // la primera carga de ExcelJS tarda
 })

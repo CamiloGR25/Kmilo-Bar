@@ -388,8 +388,10 @@ service cloud.firestore {
     function validOrder(d) {
       return d.keys().hasOnly(['number', 'type', 'tableId', 'tableName', 'label', 'status',
           'cashSessionId', 'businessDate', 'items', 'lastLineId', 'subtotal', 'total', 'paidTotal',
-          'tipTotal', 'balance', 'lastPaymentId', 'uid', 'openedAt', 'closedAt', 'updatedAt'])
+          'tipTotal', 'balance', 'lastPaymentId', 'rounds', 'uid', 'openedAt', 'closedAt', 'updatedAt'])
         && isInt(d.number) && d.number > 0
+        // Cobro por ronda: lo pagado de cada ronda (ID de ronda -> monto), sin tope en reglas.
+        && d.rounds is map
         && d.type in ['mesa', 'barra']
         && (d.type == 'mesa'
           ? (isText(d.tableId, 1, 60) && isText(d.tableName, 1, 40))
@@ -413,7 +415,7 @@ service cloud.firestore {
 
     function orderCreate(id, d) {
       let oc = docPath('counters', 'orders');
-      return d.status == 'abierta' && d.items.size() == 0 && d.subtotal == 0
+      return d.status == 'abierta' && d.items.size() == 0 && d.subtotal == 0 && d.rounds.size() == 0
         && d.lastLineId == null && d.paidTotal == 0 && d.get('lastPaymentId', null) == null
         && d.openedAt == request.time && d.closedAt == null
         // D-110: la cuenta pertenece a la caja abierta.
@@ -433,41 +435,63 @@ service cloud.firestore {
     function orderUpdate(id, a, b) {
       let diff = b.items.diff(a.items);
       let paying = b.get('lastPaymentId', null) != a.get('lastPaymentId', null);
+      let closing = b.status == 'pagada' && a.status != 'pagada';
+      // Sin pago ni cierre: solo pedir cuenta, cambiar nombre, mover o agregar/cancelar una línea.
+      let plainUpdate = b.paidTotal == a.paidTotal && b.rounds == a.rounds
+        && diff.affectedKeys().size() == 0
+        && b.lastLineId == a.lastLineId && b.subtotal == a.subtotal && orderMeta(a, b);
+      let lineChange = b.paidTotal == a.paidTotal && b.rounds == a.rounds
+        && diff.affectedKeys().size() > 0
+        && diff.affectedKeys().hasOnly([b.lastLineId])
+        && b.type == a.type && b.tableId == a.tableId && b.label == a.label
+        && b.closedAt == null
+        && (diff.addedKeys().size() == 1
+          ? addLine(id, a, b, b.lastLineId)
+          : cancelLine(id, a, b, b.lastLineId));
       return a.status in ['abierta', 'por_cobrar']
         && b.number == a.number && b.cashSessionId == a.cashSessionId
         && b.businessDate == a.businessDate && b.openedAt == a.openedAt
-        && (paying
-          ? (diff.affectedKeys().size() == 0 && payOrder(id, a, b))
-          : (b.paidTotal == a.paidTotal
-            && (diff.affectedKeys().size() == 0
-              ? (b.lastLineId == a.lastLineId && b.subtotal == a.subtotal && orderMeta(a, b))
-              : (diff.affectedKeys().hasOnly([b.lastLineId])
-                && b.type == a.type && b.tableId == a.tableId && b.label == a.label
-                && b.closedAt == null
-                && (diff.addedKeys().size() == 1
-                  ? addLine(id, a, b, b.lastLineId)
-                  : cancelLine(id, a, b, b.lastLineId))))))
+        && (closing
+          ? closeOk(a, b)
+          : (paying
+            ? (diff.affectedKeys().size() == 0 && payOrder(id, a, b))
+            : (plainUpdate || lineChange)))
         && tableFollows(id, a, b);
     }
 
-    // R-PAG-02 / R-VEN-08: un pago nuevo en el mismo commit; con saldo 0 la cuenta queda pagada.
+    // Cobro por ronda (D-230): un pago nuevo del mismo commit, ligado a una ronda. La cuenta no
+    // cambia de estado: sigue abierta hasta cerrarla a mano.
     function payOrder(id, a, b) {
       let payPath = docPath('payments', b.lastPaymentId);
       let p = getAfter(payPath).data;
+      let rid = p.roundId;
       return isText(b.lastPaymentId, 1, 60)
         && b.type == a.type && b.tableId == a.tableId && b.label == a.label
         && b.lastLineId == a.lastLineId && b.subtotal == a.subtotal
         && !exists(payPath)
         && p.orderId == id
         && p.amount == b.paidTotal - a.paidTotal
-        && (b.balance == 0
-          ? (b.status == 'pagada' && b.closedAt == request.time)
-          : (b.status == a.status && b.closedAt == null));
+        && b.rounds.diff(a.rounds).affectedKeys().hasOnly([rid])
+        && b.rounds[rid] - a.rounds.get(rid, 0) == p.amount
+        && b.balance == b.total - b.paidTotal
+        && b.status == a.status && b.closedAt == null;
+    }
+
+    // Cierre explícito (D-230): solo con la cuenta cobrada en su totalidad; libera la mesa.
+    function closeOk(a, b) {
+      return b.status == 'pagada'
+        && a.balance == 0 && b.balance == 0 && b.paidTotal == a.paidTotal
+        && b.closedAt == request.time
+        && b.subtotal > 0 && b.subtotal == a.subtotal
+        && b.items == a.items && b.rounds == a.rounds
+        && b.lastLineId == a.lastLineId && b.lastPaymentId == a.lastPaymentId
+        && b.type == a.type && b.tableId == a.tableId && b.label == a.label;
     }
 
     function validLine(l) {
       return l.keys().hasOnly(['productId', 'nameSnap', 'categoryIdSnap', 'unitPrice',
-          'unitCostSnap', 'qty', 'cancelledQty', 'lostQty', 'lastCancelId', 'addedAt'])
+          'unitCostSnap', 'qty', 'cancelledQty', 'lostQty', 'lastCancelId', 'addedAt', 'roundId'])
+        && isText(l.roundId, 1, 60) && l.roundId.matches('^[A-Za-z0-9-]{1,40}$')
         && isText(l.productId, 1, 60)
         && l.nameSnap is string && l.categoryIdSnap is string
         && isNonNegInt(l.unitPrice) && isNonNegInt(l.unitCostSnap)
@@ -508,7 +532,7 @@ service cloud.firestore {
         'cancel_' + id + '_' + lid + '_' + string(n.lastCancelId));
       return validLine(n)
         && n.productId == o.productId && n.nameSnap == o.nameSnap
-        && n.categoryIdSnap == o.categoryIdSnap
+        && n.categoryIdSnap == o.categoryIdSnap && n.roundId == o.roundId
         && n.unitPrice == o.unitPrice && n.unitCostSnap == o.unitCostSnap
         && n.qty == o.qty && n.addedAt == o.addedAt
         && dc >= 0 && dl >= 0 && dc + dl > 0 && (dc == 0 || dl == 0)
@@ -556,9 +580,10 @@ service cloud.firestore {
     }
 
     function paymentShape(d) {
-      return d.keys().hasOnly(['orderId', 'cashSessionId', 'businessDate', 'method', 'channel',
+      return d.keys().hasOnly(['orderId', 'roundId', 'cashSessionId', 'businessDate', 'method', 'channel',
           'amount', 'tendered', 'change', 'reference', 'kind', 'uid', 'createdAt', 'correctedAt',
           'correctedFrom'])
+        && isText(d.roundId, 1, 40) && d.roundId.matches('^[A-Za-z0-9-]{1,40}$')
         && d.kind == 'pago'
         && isInt(d.amount) && d.amount > 0
         && (d.method == 'efectivo'

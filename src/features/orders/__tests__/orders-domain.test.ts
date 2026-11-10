@@ -4,7 +4,10 @@ import { nextTableNumber, newTable, validateTableName } from '@/features/tables/
 import {
   activeQty,
   buildLine,
+  billedRounds,
   cancellableQty,
+  roundCancellationError,
+  roundPending,
   canCloseWithoutConsumption,
   changeRoundQty,
   formatElapsed,
@@ -45,6 +48,7 @@ function line(over: Partial<OrderLine> = {}): OrderLine {
     lostQty: 0,
     lastCancelId: null,
     addedAt: null,
+    roundId: 'r1',
     ...over,
   }
 }
@@ -211,12 +215,13 @@ describe('cuenta agrupada por producto (D-218)', () => {
   })
 })
 
-describe('cancelación con pagos (D-219, sin reembolsos)', () => {
-  it('limita las unidades a lo que aún no se ha pagado', () => {
-    const g = { activeQty: 3, unitPrice: 4500 }
-    expect(cancellableQty(g, { balance: 13_500 })).toBe(3)
-    expect(cancellableQty(g, { balance: 4_500 })).toBe(1)
-    expect(cancellableQty(g, { balance: 4_000 })).toBe(0)
+describe('cancelación con pagos (D-219, D-230, sin reembolsos)', () => {
+  it('limita las unidades a lo que aún no se ha pagado de su ronda', () => {
+    const l = line({ roundId: 'r1', qty: 3 })
+    const g = { lines: [l], unitPrice: 4500 }
+    expect(cancellableQty(g, { lines: [l], rounds: {} })).toBe(3)
+    expect(cancellableQty(g, { lines: [l], rounds: { r1: 4_500 } })).toBe(2)
+    expect(cancellableQty(g, { lines: [l], rounds: { r1: 12_000 } })).toBe(0)
   })
 })
 
@@ -242,6 +247,7 @@ describe('resumen para el cliente (D-219)', () => {
     balance: 8_000,
     openedAt: null,
     closedAt: null,
+    rounds: {},
   }
   it('agrupa, omite lo cancelado y muestra pagos y saldo', () => {
     const text = receiptText('Kmilo Bar', order, [{ label: 'Nequi', amount: 10_000 }], '5 nov')
@@ -250,5 +256,48 @@ describe('resumen para el cliente (D-219)', () => {
     expect(text).not.toContain('Ron')
     expect(text).toContain('Pagado (Nequi): $ 10.000')
     expect(text).toContain('Saldo pendiente: $ 8.000')
+  })
+})
+
+describe('rondas de la cuenta (D-230)', () => {
+  const r1 = [
+    line({ lineId: 'a', roundId: 'r1', qty: 2, addedAt: new Date('2026-11-10T10:00:00Z') }),
+  ]
+  const r2 = [
+    line({
+      lineId: 'b',
+      roundId: 'r2',
+      productId: 'ron',
+      qty: 1,
+      unitPrice: 30_000,
+      addedAt: new Date('2026-11-10T11:00:00Z'),
+    }),
+  ]
+  const lines = [...r1, ...r2]
+
+  it('arma las rondas en orden, con su total, lo pagado y lo pendiente', () => {
+    const rounds = billedRounds({ lines, rounds: { r1: 4_500 } })
+    expect(rounds.map((r) => [r.number, r.id, r.total, r.paid, r.pending])).toEqual([
+      [1, 'r1', 9_000, 4_500, 4_500],
+      [2, 'r2', 30_000, 0, 30_000],
+    ])
+  })
+
+  it('lo pendiente de una ronda no pasa de su total ni baja de cero', () => {
+    expect(roundPending({ lines, rounds: { r1: 99_000 } }, 'r1')).toBe(0)
+    expect(roundPending({ lines, rounds: {} }, 'nadie')).toBe(0)
+  })
+
+  it('no cancela lo cobrado de una ronda (D-230)', () => {
+    const l = line({ lineId: 'a', roundId: 'r1', qty: 3, unitPrice: 4_500 })
+    const order = { lines: [l], rounds: { r1: 9_000 } }
+    expect(roundCancellationError(order, l, 1)).toBeNull()
+    expect(roundCancellationError(order, l, 2)).toMatch(/9.000 cobrados/)
+    expect(roundCancellationError({ lines: [l], rounds: {} }, l, 3)).toBeNull()
+  })
+
+  it('una ronda cancelada por completo no aparece', () => {
+    const cancelled = [line({ lineId: 'a', roundId: 'r1', qty: 2, cancelledQty: 2 })]
+    expect(billedRounds({ lines: cancelled, rounds: {} })).toEqual([])
   })
 })

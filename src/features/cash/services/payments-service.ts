@@ -13,16 +13,11 @@ import {
   where,
 } from 'firebase/firestore'
 import { formatCop } from '@/domain/money'
-import {
-  correctionStats,
-  mergeDeltas,
-  paidOrderStats,
-  paymentStats,
-} from '@/domain/metrics/daily-stats'
+import { correctionStats, paymentStats } from '@/domain/metrics/daily-stats'
 import { db } from '@/lib/firebase/firestore'
 import { toDate, useSubscription } from '@/lib/firebase/use-subscription'
 import { addAudit } from '@/features/audit/services/audit'
-import { isOpen, orderTitle } from '@/features/orders/domain/orders'
+import { isOpen, roundPending } from '@/features/orders/domain/orders'
 import { orderFromDoc } from '@/features/orders/services/orders-service'
 import { addDailyStats } from '@/features/reports/services/daily-stats'
 import {
@@ -89,14 +84,15 @@ export interface PaymentResult {
 }
 
 /**
- * Registra un pago (R-PAG-02). Si el saldo llega a 0, la cuenta queda `pagada`, la mesa se
- * libera y sus ventas se suman al resumen diario (F-04, F-07). Lo cobrado se suma siempre (F-06).
+ * Registra un pago de una ronda (R-PAG-02, D-230). La cuenta no cambia de estado: queda abierta
+ * hasta cerrarla. Lo cobrado se suma siempre al resumen del día (F-06).
  */
 export async function registerPayment(
   uid: string,
   orderId: string,
   paymentId: string,
   plan: PaymentPlan,
+  roundId: string,
 ): Promise<PaymentResult> {
   return runTransaction(db, async (tx) => {
     const orderRef = doc(db, 'orders', orderId)
@@ -116,8 +112,10 @@ export async function registerPayment(
     if (cashSnap.data()?.openSessionId !== order.cashSessionId) {
       throw new PaymentError('La caja de esta cuenta no está abierta.')
     }
-    if (plan.amount <= 0 || plan.amount > order.balance) {
-      throw new PaymentError(`El saldo cambió: ahora es ${formatCop(order.balance)}.`)
+    const pending = roundPending(order, roundId)
+    if (pending <= 0) throw new PaymentError('Esta ronda ya está cobrada.')
+    if (plan.amount <= 0 || plan.amount > pending) {
+      throw new PaymentError(`La ronda ahora debe ${formatCop(pending)}.`)
     }
 
     const paidTotal = order.paidTotal + plan.amount
@@ -125,6 +123,7 @@ export async function registerPayment(
     const paid = balance === 0
     tx.set(paymentRef, {
       orderId,
+      roundId,
       cashSessionId: order.cashSessionId,
       businessDate: order.businessDate,
       method: plan.method,
@@ -143,28 +142,10 @@ export async function registerPayment(
       paidTotal,
       balance,
       lastPaymentId: paymentId,
-      // R-VEN-08: solo pasa a pagada con saldo 0 (sin fiado, D-103).
-      ...(paid ? { status: 'pagada', closedAt: serverTimestamp() } : {}),
+      rounds: { ...order.rounds, [roundId]: (order.rounds[roundId] ?? 0) + plan.amount },
       updatedAt: serverTimestamp(),
     })
-    if (paid && order.type === 'mesa' && order.tableId) {
-      tx.update(doc(db, 'tables', order.tableId), { status: 'disponible', currentOrderId: null })
-    }
-    const stats = paymentStats(plan)
-    addDailyStats(
-      db,
-      tx,
-      order.businessDate,
-      paid ? mergeDeltas(stats, paidOrderStats(order.lines, new Date())) : stats,
-    )
-    if (paid) {
-      addAudit(db, tx, uid, {
-        action: 'cuenta_pagada',
-        entity: 'order',
-        entityId: orderId,
-        summary: `Cuenta #${order.number} (${orderTitle(order)}) pagada: ${formatCop(order.total)}`,
-      })
-    }
+    addDailyStats(db, tx, order.businessDate, paymentStats(plan))
     return { created: true, paid, balanceAfter: balance }
   })
 }

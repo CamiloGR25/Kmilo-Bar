@@ -2,7 +2,7 @@
  * Cuentas (mesas y barra) — BUSINESS_RULES R-VEN-02…06, R-VEN-11/12 y D-217.
  * Lógica pura: los servicios la ejecutan dentro de transacciones de Firestore.
  */
-import type { Cop } from '@/domain/money'
+import { formatCop, type Cop } from '@/domain/money'
 
 export type OrderType = 'mesa' | 'barra'
 
@@ -37,6 +37,8 @@ export interface OrderLine {
   lostQty: number
   lastCancelId: string | null
   addedAt: Date | null
+  /** Ronda a la que pertenece la línea (D-230): cada confirmación de la ronda tiene su ID. */
+  roundId: string
 }
 
 export interface Order {
@@ -58,6 +60,8 @@ export interface Order {
   balance: Cop
   openedAt: Date | null
   closedAt: Date | null
+  /** Lo pagado de cada ronda (ID de ronda → monto), D-230. */
+  rounds: Record<string, Cop>
 }
 
 export class OrderError extends Error {
@@ -144,6 +148,72 @@ export function buildLine(product: SellableProduct, qty: number) {
 // ---------------------------------------------------------------------------
 // Ronda (D-217): selección local antes de confirmar
 // ---------------------------------------------------------------------------
+
+/** Ronda de la cuenta: sus líneas, cuánto vale, cuánto está pagado y cuánto falta (D-230). */
+export interface BilledRound {
+  id: string
+  /** Número de ronda dentro de la cuenta (1, 2, …) en orden de confirmación. */
+  number: number
+  lines: OrderLine[]
+  total: Cop
+  paid: Cop
+  pending: Cop
+  at: Date | null
+}
+
+/** Total de una ronda con sus unidades activas (precio congelado de cada línea). */
+export function billedRoundTotal(lines: readonly OrderLine[], roundId: string): Cop {
+  return lines
+    .filter((l) => l.roundId === roundId)
+    .reduce((sum, l) => sum + l.unitPrice * activeQty(l), 0)
+}
+
+/** Rondas de la cuenta en orden de confirmación; las que quedan sin unidades activas no aparecen. */
+export function billedRounds(order: Pick<Order, 'lines' | 'rounds'>): BilledRound[] {
+  const ids: string[] = []
+  for (const l of order.lines) if (!ids.includes(l.roundId)) ids.push(l.roundId)
+  return ids
+    .map((id, i): BilledRound => {
+      const lines = order.lines.filter((l) => l.roundId === id)
+      const total = billedRoundTotal(lines, id)
+      const paid = Math.min(order.rounds[id] ?? 0, total)
+      return {
+        id,
+        number: i + 1,
+        lines,
+        total,
+        paid,
+        pending: total - paid,
+        at: earliest(lines),
+      }
+    })
+    .filter((r) => r.total > 0)
+}
+
+function earliest(lines: readonly OrderLine[]): Date | null {
+  const times = lines.flatMap((l) => (l.addedAt ? [l.addedAt.getTime()] : []))
+  return times.length > 0 ? new Date(Math.min(...times)) : null
+}
+
+/**
+ * D-230: cancelar `unitsOut` unidades de una línea no puede bajar su ronda por debajo de lo ya
+ * cobrado. Devuelve el mensaje de error, o null si la cancelación se puede hacer.
+ */
+export function roundCancellationError(
+  order: Pick<Order, 'lines' | 'rounds'>,
+  line: Pick<OrderLine, 'roundId' | 'unitPrice'>,
+  unitsOut: number,
+): string | null {
+  const total = billedRoundTotal(order.lines, line.roundId)
+  const paid = order.rounds[line.roundId] ?? 0
+  if (total - line.unitPrice * unitsOut >= paid) return null
+  return `Esa ronda ya tiene ${formatCop(paid)} cobrados: solo se puede cancelar hasta ${formatCop(Math.max(0, total - paid))}.`
+}
+
+/** Lo que falta por cobrar de una ronda (0 si no existe). */
+export function roundPending(order: Pick<Order, 'lines' | 'rounds'>, roundId: string): Cop {
+  return billedRounds(order).find((r) => r.id === roundId)?.pending ?? 0
+}
 
 export interface RoundItem {
   /** ID de la línea que se creará; se genera al tocar el producto (idempotencia, D-203). */
@@ -292,11 +362,14 @@ export function splitGroupCancellation(
  * devuelve, así que la cancelación no puede bajar el total por debajo de lo pagado.
  */
 export function cancellableQty(
-  group: Pick<LineGroup, 'activeQty' | 'unitPrice'>,
-  order: Pick<Order, 'balance'>,
+  group: Pick<LineGroup, 'lines' | 'unitPrice'>,
+  order: Pick<Order, 'lines' | 'rounds'>,
 ): number {
-  if (group.unitPrice <= 0) return group.activeQty
-  return Math.min(group.activeQty, Math.floor(order.balance / group.unitPrice))
+  if (group.unitPrice <= 0) return group.lines.reduce((n, l) => n + activeQty(l), 0)
+  return group.lines.reduce((n, l) => {
+    const left = billedRoundTotal(order.lines, l.roundId) - (order.rounds[l.roundId] ?? 0)
+    return n + Math.min(activeQty(l), Math.max(0, Math.floor(left / group.unitPrice)))
+  }, 0)
 }
 
 /** R-VEN-02 / D-217: solo se cierra sin consumo si no queda nada por cobrar. */

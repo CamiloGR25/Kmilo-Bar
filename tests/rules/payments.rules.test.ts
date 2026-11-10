@@ -59,6 +59,7 @@ const line = {
   lostQty: 0,
   lastCancelId: null,
   addedAt: T0,
+  roundId: 'r1',
 }
 
 /** Cuenta de $13.500 en la mesa 1, con caja cs1 abierta. */
@@ -85,6 +86,7 @@ async function seedOrder(over: Record<string, unknown> = {}) {
       businessDate: DAY,
       items: { l1: line },
       lastLineId: 'l1',
+      rounds: {},
       subtotal: 13500,
       total: 13500,
       paidTotal: 0,
@@ -114,10 +116,11 @@ const cashPayment = (over = {}) => ({
   createdAt: serverTimestamp(),
   correctedAt: null,
   correctedFrom: null,
+  roundId: 'r1',
   ...over,
 })
 
-/** Pago completo: pago + cuenta pagada + mesa libre + agregados. */
+/** Cobro completo de la ronda r1 (D-230): pago + saldo 0; la cuenta sigue abierta. */
 function payAll(db: Firestore, payment = cashPayment(), orderOver = {}) {
   const b = writeBatch(db)
   b.set(doc(db, 'payments/pay1'), payment)
@@ -125,10 +128,30 @@ function payAll(db: Firestore, payment = cashPayment(), orderOver = {}) {
     paidTotal: 13500,
     balance: 0,
     lastPaymentId: 'pay1',
+    rounds: { r1: 13500 },
+    updatedAt: serverTimestamp(),
+    ...orderOver,
+  })
+  b.set(
+    doc(db, `dailyStats/${DAY}`),
+    {
+      businessDate: DAY,
+      collected: increment(13500),
+      byMethod: { efectivo: increment(13500) },
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  )
+  return b.commit()
+}
+
+/** Cierre explícito de una cuenta cobrada: pagada, mesa libre, venta al día (D-230). */
+function closeAll(db: Firestore) {
+  const b = writeBatch(db)
+  b.update(doc(db, 'orders/o1'), {
     status: 'pagada',
     closedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    ...orderOver,
   })
   b.update(doc(db, 'tables/mesa-1'), { status: 'disponible', currentOrderId: null })
   b.set(
@@ -138,8 +161,6 @@ function payAll(db: Firestore, payment = cashPayment(), orderOver = {}) {
       salesGross: increment(13500),
       cogs: increment(7200),
       ordersCount: increment(1),
-      collected: increment(13500),
-      byMethod: { efectivo: increment(13500) },
       byProduct: { p1: { name: 'Águila', categoryId: 'cervezas', qty: increment(3) } },
       updatedAt: serverTimestamp(),
     },
@@ -167,20 +188,33 @@ function payPart(db: Firestore, amount: number, over = {}) {
     paidTotal: amount,
     balance: 13500 - amount,
     lastPaymentId: 'pay1',
+    rounds: { r1: amount },
     updatedAt: serverTimestamp(),
   })
   return b.commit()
 }
 
 describe('pagos (R-PAG-02, R-VEN-08)', () => {
-  it('pago total en efectivo con cambio: la cuenta queda pagada y la mesa libre', async () => {
+  it('cobro completo de la ronda con cambio: la cuenta sigue abierta', async () => {
     await seedOrder()
     await assertSucceeds(payAll(admin()))
   })
 
-  it('pago parcial por transferencia: la cuenta sigue abierta', async () => {
+  it('pago parcial de la ronda por transferencia: la cuenta sigue abierta', async () => {
     await seedOrder()
     await assertSucceeds(payPart(admin(), 5000))
+  })
+
+  it('cierra la cuenta cobrada: pagada, mesa libre y venta al día', async () => {
+    await seedOrder()
+    await assertSucceeds(payAll(admin()))
+    await assertSucceeds(closeAll(admin()))
+  })
+
+  it('no cierra una cuenta con saldo pendiente (sin fiado)', async () => {
+    await seedOrder()
+    await assertSucceeds(payPart(admin(), 5000))
+    await assertFails(closeAll(admin()))
   })
 
   it('no acepta un pago sin la cuenta que lo refleje', async () => {
@@ -226,7 +260,7 @@ describe('pagos (R-PAG-02, R-VEN-08)', () => {
     await assertFails(payPart(admin(), 5000, { channel: 'tarjeta' }))
   })
 
-  it('no se marca pagada con saldo pendiente (sin fiado)', async () => {
+  it('un pago no cierra la cuenta aunque el saldo llegue a cero (D-230)', async () => {
     await seedOrder()
     const db = admin()
     const b = writeBatch(db)

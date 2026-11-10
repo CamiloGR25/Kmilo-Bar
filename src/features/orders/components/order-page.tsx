@@ -30,6 +30,8 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 import {
   groupLines,
+  billedRounds,
+  type BilledRound,
   canCloseWithoutConsumption,
   changeRoundQty,
   openedText,
@@ -44,6 +46,7 @@ import {
 } from '../domain/orders'
 import {
   addLine,
+  closeOrder,
   closeWithoutConsumption,
   newId,
   setOrderStatus,
@@ -99,7 +102,11 @@ function OrderView({ order }: { order: Order }) {
   const [naming, setNaming] = useState(false)
   const [closing, setClosing] = useState(false)
   const [statusPending, setStatusPending] = useState(false)
-  const [paying, setPaying] = useState(false)
+  // Ronda que se está cobrando (D-230); null si no hay cobro abierto.
+  const [payRound, setPayRound] = useState<string | null>(null)
+  const [closingAccount, setClosingAccount] = useState(false)
+  const rounds = billedRounds(order)
+  const nextRound = rounds.find((r) => r.pending > 0) ?? null
   const [sharing, setSharing] = useState(false)
   const payments = usePaymentsOfOrder(order.id)
 
@@ -126,12 +133,14 @@ function OrderView({ order }: { order: Order }) {
   async function confirmRound() {
     if (round.length === 0) return
     setConfirming(true)
+    // Una ronda = una confirmación: sus líneas comparten este ID (D-230).
+    const roundId = newId()
     const failed: RoundItem[] = []
     const errors: Record<string, string> = {}
     let done = 0
     for (const item of round) {
       try {
-        const res = await addLine(uid, order.id, item)
+        const res = await addLine(uid, order.id, item, roundId)
         done++
         const s = inventory.settings
         if (s) {
@@ -154,6 +163,20 @@ function OrderView({ order }: { order: Order }) {
         done === 1 ? 'Producto agregado a la cuenta' : `${done} productos agregados a la cuenta`,
       )
     if (failed.length > 0) toast.error('Algunos productos no se pudieron agregar. Revisa la ronda.')
+    // D-230: la ronda confirmada se ofrece para cobrar ahora (o se deja por cobrar).
+    if (done > 0 && failed.length === 0) setPayRound(roundId)
+  }
+
+  async function closeAccount() {
+    setClosingAccount(true)
+    try {
+      await closeOrder(uid, order.id)
+      toast.success(`${orderTitle(order)} cerrada`)
+      navigate(back.to)
+    } catch (e) {
+      toast.error(errorText(e))
+      setClosingAccount(false)
+    }
   }
 
   async function toggleBill() {
@@ -224,6 +247,9 @@ function OrderView({ order }: { order: Order }) {
             <h2 id="consumo" className="sr-only">
               Consumo
             </h2>
+            {rounds.length > 0 && (
+              <RoundsList rounds={rounds} open={open} onPay={(id) => setPayRound(id)} />
+            )}
             {order.lines.length === 0 ? (
               <p className="px-4 py-6 text-label text-muted-foreground">
                 {open
@@ -267,7 +293,7 @@ function OrderView({ order }: { order: Order }) {
                   </p>
                 ))}
                 <p className="flex justify-between gap-3 pt-1 font-medium">
-                  <span>{order.balance > 0 ? 'Saldo por cobrar' : 'Pagada'}</span>
+                  <span>{order.balance > 0 ? 'Saldo por cobrar' : 'Sin saldo por cobrar'}</span>
                   <span className={cn('tabular', order.balance > 0 && 'text-warning')}>
                     {formatCop(order.balance)}
                   </span>
@@ -300,20 +326,37 @@ function OrderView({ order }: { order: Order }) {
                   {order.type === 'barra' ? 'Pasar a mesa' : 'Mover'}
                 </Button>
               </div>
-              <Button
-                size="lg"
-                onClick={() => {
-                  if (round.length > 0) {
-                    toast.warning('Confirma o vacía la ronda antes de cobrar.')
-                    return
-                  }
-                  setPaying(true)
-                }}
-                disabled={order.balance === 0 || confirming}
-              >
-                <ReceiptText aria-hidden />
-                Cobrar {formatCop(order.balance)}
-              </Button>
+              {order.balance > 0 ? (
+                <Button
+                  size="lg"
+                  onClick={() => {
+                    if (round.length > 0) {
+                      toast.warning('Confirma o vacía la ronda antes de cobrar.')
+                      return
+                    }
+                    setPayRound(nextRound?.id ?? null)
+                  }}
+                  disabled={!nextRound || confirming}
+                >
+                  <ReceiptText aria-hidden />
+                  {nextRound
+                    ? `Cobrar ronda ${nextRound.number} · ${formatCop(nextRound.pending)}`
+                    : 'Sin rondas por cobrar'}
+                </Button>
+              ) : (
+                <Button
+                  size="lg"
+                  onClick={closeAccount}
+                  disabled={order.subtotal === 0 || closingAccount || confirming}
+                >
+                  {closingAccount ? (
+                    <Loader2 aria-hidden className="animate-spin" />
+                  ) : (
+                    <Check aria-hidden />
+                  )}
+                  Cerrar cuenta
+                </Button>
+              )}
               {order.lines.length > 0 && (
                 <Button variant="outline" onClick={() => setSharing(true)}>
                   <Share2 aria-hidden />
@@ -403,9 +446,9 @@ function OrderView({ order }: { order: Order }) {
       {open && (
         <PaymentDialog
           order={order}
-          open={paying}
-          onOpenChange={setPaying}
-          onPaid={() => navigate(back.to)}
+          roundId={payRound ?? ''}
+          open={payRound !== null}
+          onOpenChange={(o) => !o && setPayRound(null)}
         />
       )}
       <ShareReceiptDialog
@@ -605,5 +648,51 @@ function RoundPanel({
         </Button>
       </div>
     </section>
+  )
+}
+
+/** Rondas de la cuenta con su estado (D-230): cobrada, pendiente y el botón para cobrarla. */
+function RoundsList({
+  rounds,
+  open,
+  onPay,
+}: {
+  rounds: BilledRound[]
+  open: boolean
+  onPay: (roundId: string) => void
+}) {
+  return (
+    <ul aria-label="Rondas" className="divide-y divide-border border-b">
+      {rounds.map((r) => (
+        <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-label font-semibold">
+              Ronda {r.number}
+              {r.at
+                ? ` · ${r.at.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' })}`
+                : ''}
+            </p>
+            <p className="text-meta text-muted-foreground">
+              {r.lines.length} {r.lines.length === 1 ? 'producto' : 'productos'} ·{' '}
+              {formatCop(r.total)}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {r.pending === 0 ? (
+              <span className="text-label font-medium text-success">Cobrada</span>
+            ) : (
+              <span className="text-label font-medium text-warning">
+                Pendiente {formatCop(r.pending)}
+              </span>
+            )}
+            {open && r.pending > 0 && (
+              <Button variant="outline" size="sm" onClick={() => onPay(r.id)}>
+                Cobrar
+              </Button>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
   )
 }
