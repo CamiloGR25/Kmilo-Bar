@@ -1,0 +1,39 @@
+name: Reportes por correo
+
+# Resumen semanal (lunes 08:00 Bogotá) y mensual (día 1, 08:00 Bogotá).
+# Secretos necesarios: FIREBASE_SERVICE_ACCOUNT, REPORT_TO, GMAIL_USER, GMAIL_APP_PASSWORD.
+on:
+  schedule:
+    - cron: '0 13 * * 1'
+    - cron: '0 13 1 * *'
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: 'Tipo de resumen (vacío = según la fecha)'
+        required: false
+        type: choice
+        options: ['', semanal, mensual]
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Enviar el resumen
+        env:
+          TSX_TSCONFIG_PATH: tsconfig.app.json
+          REPORT_KIND: ${{ inputs.kind }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: npx tsx scripts/report-mail/send.ts

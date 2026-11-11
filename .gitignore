@@ -34,3 +34,6 @@ firestore-debug.log*
 ui-debug.log*
 .firebase
 *-service-account*.json
+
+# Simulaciones del envío de reportes (scripts/report-mail, DRY_RUN=1)
+out/
